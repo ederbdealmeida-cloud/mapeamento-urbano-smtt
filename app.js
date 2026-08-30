@@ -429,7 +429,7 @@ function escapeHtml(s){ return (s||"").toString().replace(/[&<>"']/g, m=>({"&":"
 /* ============================================================
    MÓDULO — MAPA INTERATIVO (Google Maps)
    ============================================================ */
-const GOOGLE_MAPS_API_KEY = "AIzaSyAbJ38elShzDuBtt0vLcNSawm6AlXfnzWs";
+const GOOGLE_MAPS_API_KEY = "AIzaSyA2Ad_NSKZc49YYX-GZ1NPbGzXKJ5NTPr4";
 let _gmapsLoadPromise = null;
 let _gmapsAuthError = null;
 window.gm_authFailure = function(){
