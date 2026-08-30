@@ -431,15 +431,29 @@ function escapeHtml(s){ return (s||"").toString().replace(/[&<>"']/g, m=>({"&":"
    ============================================================ */
 const GOOGLE_MAPS_API_KEY = "AIzaSyAbJ38elShzDuBtt0vLcNSawm6AlXfnzWs";
 let _gmapsLoadPromise = null;
+let _gmapsAuthError = null;
+window.gm_authFailure = function(){
+  _gmapsAuthError = "O Google recusou a chave de API (erro de autenticação). Causas mais comuns: faturamento não ativado no projeto do Google Cloud, a API 'Maps JavaScript API' não está habilitada para essa chave, ou a restrição de domínio (HTTP referrer) não inclui este site.";
+  const box = document.getElementById("mapa-el");
+  if(box){
+    box.style.display = "flex";
+    box.innerHTML = `<div class="empty" style="width:100%;"><div class="big">⚠️</div>${escapeHtml(_gmapsAuthError)}</div>`;
+  }
+};
 function loadGoogleMaps(){
   if(window.google && window.google.maps) return Promise.resolve();
   if(_gmapsLoadPromise) return _gmapsLoadPromise;
   _gmapsLoadPromise = new Promise((resolve, reject)=>{
-    window.__onGMapsReady = ()=> resolve();
+    window.__onGMapsReady = ()=>{
+      setTimeout(()=>{
+        if(_gmapsAuthError) reject(new Error(_gmapsAuthError));
+        else resolve();
+      }, 150);
+    };
     const s = document.createElement("script");
     s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&callback=__onGMapsReady&loading=async&v=weekly`;
     s.async = true;
-    s.onerror = ()=> reject(new Error("Falha ao carregar o Google Maps. Verifique a chave de API e as restrições de domínio."));
+    s.onerror = ()=> reject(new Error("Falha ao carregar o Google Maps. Verifique a conexão com a internet."));
     document.head.appendChild(s);
   });
   return _gmapsLoadPromise;
@@ -456,7 +470,10 @@ async function renderMapa(){
   const vistorias = getVistorias().filter(v=> v.lat && v.lng);
 
   try{
-    await loadGoogleMaps();
+    await Promise.race([
+      loadGoogleMaps(),
+      new Promise((_,reject)=> setTimeout(()=> reject(new Error("O Google Maps demorou demais para responder. Verifique sua conexão com a internet e tente novamente.")), 12000))
+    ]);
   }catch(e){
     document.getElementById("mapa-el").innerHTML = `<div class="empty" style="width:100%;"><div class="big">⚠️</div>${escapeHtml(e.message)}</div>`;
     return;
@@ -468,13 +485,20 @@ async function renderMapa(){
   mapaEl.style.display = "";
   mapaEl.innerHTML = "";
 
-  const map = new google.maps.Map(mapaEl, {
-    center: { lat: CENTER[0], lng: CENTER[1] },
-    zoom: 15,
-    mapTypeControl: false,
-    streetViewControl: true,
-    fullscreenControl: true
-  });
+  let map;
+  try{
+    map = new google.maps.Map(mapaEl, {
+      center: { lat: CENTER[0], lng: CENTER[1] },
+      zoom: 15,
+      mapTypeControl: false,
+      streetViewControl: true,
+      fullscreenControl: true
+    });
+  }catch(e){
+    mapaEl.style.display = "flex";
+    mapaEl.innerHTML = `<div class="empty" style="width:100%;"><div class="big">⚠️</div>Erro ao inicializar o mapa: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
 
   if(vistorias.length===0){
     const info = el("div","empty");
