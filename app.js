@@ -427,41 +427,98 @@ function el(tag, cls){ const e = document.createElement(tag); if(cls) e.classNam
 function escapeHtml(s){ return (s||"").toString().replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m])); }
 
 /* ============================================================
-   MÓDULO — MAPA INTERATIVO
+   MÓDULO — MAPA INTERATIVO (Google Maps)
    ============================================================ */
-function renderMapa(){
+const GOOGLE_MAPS_API_KEY = "AIzaSyAbJ38elShzDuBtt0vLcNSawm6AlXfnzWs";
+let _gmapsLoadPromise = null;
+function loadGoogleMaps(){
+  if(window.google && window.google.maps) return Promise.resolve();
+  if(_gmapsLoadPromise) return _gmapsLoadPromise;
+  _gmapsLoadPromise = new Promise((resolve, reject)=>{
+    window.__onGMapsReady = ()=> resolve();
+    const s = document.createElement("script");
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&callback=__onGMapsReady&loading=async&v=weekly`;
+    s.async = true;
+    s.onerror = ()=> reject(new Error("Falha ao carregar o Google Maps. Verifique a chave de API e as restrições de domínio."));
+    document.head.appendChild(s);
+  });
+  return _gmapsLoadPromise;
+}
+
+async function renderMapa(){
   const c = document.getElementById("content");
   const card = el("div","card");
   card.style.padding = "12px 8px 14px";
-  card.innerHTML = `<div class="section-title" style="padding:0 6px;">Ocorrências no mapa</div><div id="mapa-el"></div>
+  card.innerHTML = `<div class="section-title" style="padding:0 6px;">Ocorrências no mapa</div><div id="mapa-el" style="display:flex;align-items:center;justify-content:center;color:var(--texto-suave);">Carregando mapa...</div>
     <div class="hint" style="margin-top:8px;padding:0 6px;">🟢 Resolvido &nbsp; 🟡 Aguardando &nbsp; 🟠 Alta prioridade &nbsp; 🔴 Emergencial</div>`;
   c.appendChild(card);
 
   const vistorias = getVistorias().filter(v=> v.lat && v.lng);
-  const map = L.map("mapa-el", {zoomControl:true}).setView(CENTER, 15);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-    attribution: "© OpenStreetMap contributors © CARTO",
-    subdomains: "abcd",
-    maxZoom: 20
-  }).addTo(map);
+
+  try{
+    await loadGoogleMaps();
+  }catch(e){
+    document.getElementById("mapa-el").innerHTML = `<div class="empty" style="width:100%;"><div class="big">⚠️</div>${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if(STATE.tab !== "mapa") return; // usuário já saiu da aba enquanto carregava
+
+  const mapaEl = document.getElementById("mapa-el");
+  if(!mapaEl) return;
+  mapaEl.style.display = "";
+  mapaEl.innerHTML = "";
+
+  const map = new google.maps.Map(mapaEl, {
+    center: { lat: CENTER[0], lng: CENTER[1] },
+    zoom: 15,
+    mapTypeControl: false,
+    streetViewControl: true,
+    fullscreenControl: true
+  });
 
   if(vistorias.length===0){
     const info = el("div","empty");
     info.innerHTML = `<div class="big">🗺️</div>Nenhuma ocorrência com GPS registrada ainda.`;
     card.appendChild(info);
+    return;
   }
+
+  const infoWindow = new google.maps.InfoWindow();
+  const bounds = new google.maps.LatLngBounds();
+
   vistorias.forEach(v=>{
     const color = markerColor(v);
-    const marker = L.circleMarker([v.lat, v.lng], { radius:9, color:"#fff", weight:2, fillColor:color, fillOpacity:0.95 }).addTo(map);
-    marker.bindPopup(`
-      <b>${escapeHtml(v.rua)}${v.numero? ", "+escapeHtml(v.numero):""}</b><br>
-      ${escapeHtml(v.bairro)}<br>
-      ${fmtDate(v.timestamp)}<br>
-      ${escapeHtml(v.categoria)} · ${escapeHtml(v.subcategoria)}<br>
-      Status: <b>${v.status}</b><br>
-      ${v.fotos && v.fotos[0] ? `<img src="${v.fotos[0]}" style="width:100%;border-radius:6px;margin-top:6px;">` : ""}
-    `);
+    const pos = { lat: v.lat, lng: v.lng };
+    bounds.extend(pos);
+    const marker = new google.maps.Marker({
+      position: pos,
+      map,
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 9,
+        fillColor: color,
+        fillOpacity: 0.95,
+        strokeColor: "#fff",
+        strokeWeight: 2
+      },
+      title: v.rua
+    });
+    marker.addListener("click", ()=>{
+      infoWindow.setContent(`
+        <div style="font-size:13px;max-width:220px;">
+          <b>${escapeHtml(v.rua)}${v.numero? ", "+escapeHtml(v.numero):""}</b><br>
+          ${escapeHtml(v.bairro)}<br>
+          ${fmtDate(v.timestamp)}<br>
+          ${escapeHtml(v.categoria)} · ${escapeHtml(v.subcategoria)}<br>
+          Status: <b>${v.status}</b><br>
+          ${v.fotos && v.fotos[0] ? `<img src="${v.fotos[0]}" style="width:100%;border-radius:6px;margin-top:6px;">` : ""}
+        </div>
+      `);
+      infoWindow.open(map, marker);
+    });
   });
+
+  if(vistorias.length > 1) map.fitBounds(bounds, 40);
 }
 
 /* ============================================================
