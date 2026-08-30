@@ -306,10 +306,19 @@ function renderVistoriaForm(levantamentoMode){
 
   document.getElementById("fFotos").addEventListener("change", async (e)=>{
     const files = Array.from(e.target.files);
-    for(const f of files){
-      const dataUrl = await compressImage(f);
-      STATE.editingPhotos.push(dataUrl);
+    const preview = document.getElementById("fotosPreview");
+    const status = el("div","hint"); status.id="fotosStatus";
+    preview.parentNode.insertBefore(status, preview);
+    for(let i=0;i<files.length;i++){
+      status.textContent = `Processando foto ${i+1} de ${files.length}...`;
+      try{
+        const dataUrl = await compressImage(files[i]);
+        STATE.editingPhotos.push(dataUrl);
+      }catch(err){
+        console.error("Erro ao processar foto:", err);
+      }
     }
+    status.remove();
     renderFotosPreview();
     e.target.value = "";
   });
@@ -365,26 +374,53 @@ function renderVistoriaForm(levantamentoMode){
   });
 }
 
-function compressImage(file){
-  return new Promise((resolve)=>{
+function blobToDataURL(blob){
+  return new Promise((resolve, reject)=>{
     const reader = new FileReader();
-    reader.onload = (e)=>{
-      const img = new Image();
-      img.onload = ()=>{
-        const maxW = 1024;
-        const scale = Math.min(1, maxW / img.width);
-        const canvas = document.createElement("canvas");
-        canvas.width = img.width * scale;
-        canvas.height = img.height * scale;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.72));
-      };
-      img.onerror = ()=> resolve(e.target.result);
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
+    reader.onload = ()=> resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
   });
+}
+
+// Comprime evitando carregar a foto original inteira como texto base64 na memória
+// (fotos de câmeras atuais podem ter 10-15MB, o que travava o Chrome em aparelhos
+// com menos RAM). createImageBitmap decodifica direto do arquivo binário.
+async function compressImage(file){
+  const maxW = 900;
+  try{
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxW / bitmap.width);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.65));
+    if(blob) return await blobToDataURL(blob);
+    throw new Error("toBlob falhou");
+  }catch(e){
+    // fallback para navegadores sem createImageBitmap (mais lento, mas funcional)
+    return new Promise((resolve)=>{
+      const reader = new FileReader();
+      reader.onload = (ev)=>{
+        const img = new Image();
+        img.onload = ()=>{
+          const scale = Math.min(1, maxW / img.width);
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.65));
+        };
+        img.onerror = ()=> resolve(ev.target.result);
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
 }
 
 function el(tag, cls){ const e = document.createElement(tag); if(cls) e.className = cls; return e; }
