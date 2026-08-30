@@ -243,15 +243,29 @@ function renderVistoriaForm(levantamentoMode){
 
   document.getElementById("btnCancelar").addEventListener("click", ()=> render());
 
-  document.getElementById("btnGPS").addEventListener("click", ()=>{
+  function tentarGPS(){
     const res = document.getElementById("gpsResult");
-    if(!navigator.geolocation){ res.textContent = "Geolocalização não suportada neste dispositivo."; return; }
-    res.textContent = "Obtendo localização...";
+    if(!navigator.geolocation){ res.innerHTML = "Geolocalização não suportada neste dispositivo."; return; }
+    res.innerHTML = "Obtendo localização...";
     navigator.geolocation.getCurrentPosition(pos=>{
       STATE.gps = {lat:pos.coords.latitude, lng:pos.coords.longitude};
-      res.textContent = `✅ ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
-    }, err=>{ res.textContent = "Não foi possível obter o GPS: " + err.message; }, {enableHighAccuracy:true, timeout:10000});
-  });
+      res.innerHTML = `✅ ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
+    }, err=>{
+      if(err.code === err.PERMISSION_DENIED){
+        res.innerHTML = `⚠️ Permissão de localização negada.
+          <div class="hint" style="margin-top:6px;">
+            Toque no ícone de cadeado 🔒 ao lado do endereço no navegador → <b>Permissões</b> → <b>Localização</b> → <b>Permitir</b>. Depois toque em "Tentar novamente".<br>
+            No Android também pode liberar em: Configurações → Apps → Chrome → Permissões → Localização.
+          </div>
+          <button class="btn btn-outline btn-sm" id="btnGPSRetry" type="button" style="margin-top:8px;width:auto;">🔄 Tentar novamente</button>
+          <div class="hint" style="margin-top:6px;">Você também pode continuar sem GPS — a vistoria será salva, mas não aparecerá no módulo Mapa.</div>`;
+        document.getElementById("btnGPSRetry").addEventListener("click", tentarGPS);
+      } else {
+        res.innerHTML = "Não foi possível obter o GPS: " + err.message + `<div class="hint" style="margin-top:4px;">Verifique se o GPS do aparelho está ligado e tente novamente.</div>`;
+      }
+    }, {enableHighAccuracy:true, timeout:10000});
+  }
+  document.getElementById("btnGPS").addEventListener("click", tentarGPS);
 
   const chipsCat = document.getElementById("chipsCat");
   Object.keys(CATS).forEach(cat=>{
