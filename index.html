@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1A1D21">
+<title>Mapeamento Urbano Inteligente</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%231A1D21'/%3E%3Cpath d='M20 70 L40 30 L60 30 L80 70' stroke='%23FF7A00' stroke-width='8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='50' cy='55' r='6' fill='%23FF7A00'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  --asfalto:#1A1D21;
+  --asfalto-2:#25292E;
+  --concreto:#F4F4F2;
+  --concreto-card:#FFFFFF;
+  --linha:#E4E3DF;
+  --texto:#1A1D21;
+  --texto-suave:#5B6067;
+  --laranja:#FF7A00;
+  --laranja-escuro:#E56A00;
+  --azul:#2B6CB0;
+  --verde:#22C55E;
+  --amarelo:#EAB308;
+  --laranja-alerta:#F97316;
+  --vermelho:#EF4444;
+  --radius:14px;
+  --shadow:0 2px 10px rgba(26,29,33,0.08);
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;height:100%;}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  background:var(--concreto);
+  color:var(--texto);
+  overscroll-behavior-y:none;
+}
+h1,h2,h3{font-family:inherit;font-weight:800;letter-spacing:-0.01em;margin:0 0 4px;}
+button{font-family:inherit;}
+#app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
+
+/* HEADER */
+#topbar{
+  background:var(--asfalto);
+  color:#fff;
+  padding:14px 16px calc(14px + env(safe-area-inset-top,0px)) 16px;
+  padding-top:calc(14px + env(safe-area-inset-top,0px));
+  display:flex;align-items:center;justify-content:space-between;
+  flex-shrink:0;
+}
+#topbar .brand{display:flex;align-items:center;gap:10px;}
+#topbar .mark{width:30px;height:30px;border-radius:8px;background:var(--laranja);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;}
+#topbar .titles{line-height:1.15;}
+#topbar .titles small{display:block;font-size:11px;color:#9BA0A6;font-weight:600;text-transform:uppercase;letter-spacing:.04em;}
+#topbar .titles strong{font-size:15px;}
+#syncdot{width:9px;height:9px;border-radius:50%;background:var(--verde);flex-shrink:0;}
+#syncdot.off{background:var(--texto-suave);}
+
+/* CONTENT */
+#content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 16px calc(90px + env(safe-area-inset-bottom,0px)) 16px;}
+.card{background:var(--concreto-card);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;margin-bottom:14px;border:1px solid var(--linha);}
+.section-title{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--texto-suave);margin:6px 2px 10px;}
+.row{display:flex;gap:10px;}
+.row>*{flex:1;}
+label{display:block;font-size:12.5px;font-weight:700;color:var(--texto-suave);margin:12px 0 5px;}
+label:first-child{margin-top:0;}
+input,select,textarea{
+  width:100%;padding:11px 12px;border:1.5px solid var(--linha);border-radius:10px;
+  font-size:15px;background:#fff;color:var(--texto);font-family:inherit;
+}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--laranja);}
+textarea{resize:vertical;min-height:70px;}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  padding:12px 16px;border-radius:10px;border:none;font-weight:800;font-size:14.5px;
+  cursor:pointer;width:100%;transition:transform .08s ease;
+}
+.btn:active{transform:scale(0.98);}
+.btn-primary{background:var(--laranja);color:#fff;}
+.btn-primary:hover{background:var(--laranja-escuro);}
+.btn-outline{background:#fff;color:var(--asfalto);border:1.5px solid var(--linha);}
+.btn-dark{background:var(--asfalto);color:#fff;}
+.btn-sm{width:auto;padding:8px 12px;font-size:13px;}
+.chip-group{display:flex;flex-wrap:wrap;gap:8px;}
+.chip{
+  padding:8px 13px;border-radius:20px;border:1.5px solid var(--linha);background:#fff;
+  font-size:13px;font-weight:700;cursor:pointer;color:var(--texto-suave);
+}
+.chip.active{background:var(--asfalto);border-color:var(--asfalto);color:#fff;}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:800;}
+.badge-baixa{background:#DCFCE7;color:#15803D;}
+.badge-media{background:#FEF9C3;color:#854D0E;}
+.badge-alta{background:#FFEDD5;color:#C2410C;}
+.badge-emergencial{background:#FEE2E2;color:#B91C1C;}
+.badge-status{background:#E0E7FF;color:#3730A3;}
+.badge-concluido{background:#DCFCE7;color:#15803D;}
+.thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.thumb{width:64px;height:64px;border-radius:8px;object-fit:cover;border:1px solid var(--linha);}
+.thumb-x{position:relative;}
+.thumb-x button{position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;background:var(--vermelho);color:#fff;border:2px solid #fff;font-size:11px;line-height:1;cursor:pointer;padding:0;}
+.empty{text-align:center;padding:40px 20px;color:var(--texto-suave);}
+.empty .big{font-size:38px;margin-bottom:8px;}
+.list-item{padding:12px 0;border-bottom:1px solid var(--linha);}
+.list-item:last-child{border-bottom:none;}
+.li-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;}
+.li-title{font-weight:800;font-size:14.5px;}
+.li-sub{font-size:12.5px;color:var(--texto-suave);}
+.kv{display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px dashed var(--linha);}
+.kv:last-child{border-bottom:none;}
+.kv b{font-weight:800;}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.stat-card{background:var(--concreto-card);border-radius:12px;padding:14px;border:1px solid var(--linha);box-shadow:var(--shadow);}
+.stat-card .num{font-size:24px;font-weight:900;color:var(--asfalto);}
+.stat-card .lbl{font-size:11.5px;color:var(--texto-suave);font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-top:2px;}
+.suggest-box{background:#FFF4EA;border:1.5px dashed var(--laranja);border-radius:10px;padding:12px;margin-top:10px;}
+.suggest-box b{color:var(--laranja-escuro);}
+canvas{max-width:100%;}
+#mapa-el{width:100%;height:340px;border-radius:12px;overflow:hidden;border:1px solid var(--linha);}
+.leaflet-popup-content{font-size:13px;}
+.icv-ring{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:15px;color:#fff;flex-shrink:0;}
+.tag-cat{font-size:11px;font-weight:800;padding:3px 8px;border-radius:6px;background:var(--asfalto-2);color:#fff;}
+.filter-bar{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:10px;}
+.filter-bar select{width:auto;flex-shrink:0;font-size:13px;padding:8px 10px;}
+.hint{font-size:12px;color:var(--texto-suave);margin-top:6px;}
+table.rep{width:100%;border-collapse:collapse;font-size:12.5px;}
+table.rep th,table.rep td{padding:7px 6px;border-bottom:1px solid var(--linha);text-align:left;}
+table.rep th{color:var(--texto-suave);font-size:11px;text-transform:uppercase;}
+
+/* BOTTOM NAV */
+#nav{
+  position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--linha);
+  display:flex;padding-bottom:env(safe-area-inset-bottom,0px);box-shadow:0 -2px 10px rgba(0,0,0,0.05);z-index:50;
+}
+.nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 2px 8px;background:none;border:none;color:var(--texto-suave);cursor:pointer;font-size:10px;font-weight:700;}
+.nav-btn .ic{font-size:19px;}
+.nav-btn.active{color:var(--laranja);}
+.fab{
+  position:fixed;right:16px;bottom:calc(78px + env(safe-area-inset-bottom,0px));
+  width:56px;height:56px;border-radius:50%;background:var(--laranja);color:#fff;border:none;
+  font-size:26px;box-shadow:0 4px 14px rgba(255,122,0,0.45);cursor:pointer;z-index:49;
+  display:flex;align-items:center;justify-content:center;
+}
+@media print{
+  #nav,#topbar,.fab,.noprint{display:none!important;}
+  #content{padding:0;}
+  body{background:#fff;}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div class="brand">
+      <div class="mark">🛣️</div>
+      <div class="titles">
+        <small>SMTT · Cacequi</small>
+        <strong id="pagetitle">Vistoria</strong>
+      </div>
+    </div>
+    <div id="syncdot" title="Dados salvos localmente"></div>
+  </div>
+  <div id="content"></div>
+  <button class="fab" id="fabNew" title="Nova vistoria">+</button>
+  <div id="nav">
+    <button class="nav-btn" data-tab="vistoria"><span class="ic">📋</span>Vistoria</button>
+    <button class="nav-btn" data-tab="mapa"><span class="ic">🗺️</span>Mapa</button>
+    <button class="nav-btn" data-tab="dashboard"><span class="ic">📊</span>Painel</button>
+    <button class="nav-btn" data-tab="icv"><span class="ic">🛣️</span>ICV</button>
+    <button class="nav-btn" data-tab="os"><span class="ic">🔧</span>OS</button>
+    <button class="nav-btn" data-tab="relatorios"><span class="ic">📄</span>Relatórios</button>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
