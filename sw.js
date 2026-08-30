@@ -1,4 +1,4 @@
-const CACHE_NAME = "mui-smtt-v3";
+const CACHE_NAME = "mui-smtt-v4";
 const APP_SHELL = [
   "./",
   "./index.html",
