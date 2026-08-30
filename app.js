@@ -432,13 +432,18 @@ function escapeHtml(s){ return (s||"").toString().replace(/[&<>"']/g, m=>({"&":"
 function renderMapa(){
   const c = document.getElementById("content");
   const card = el("div","card");
-  card.innerHTML = `<div class="section-title">Ocorrências no mapa</div><div id="mapa-el"></div>
-    <div class="hint" style="margin-top:8px;">🟢 Resolvido &nbsp; 🟡 Aguardando &nbsp; 🟠 Alta prioridade &nbsp; 🔴 Emergencial</div>`;
+  card.style.padding = "12px 8px 14px";
+  card.innerHTML = `<div class="section-title" style="padding:0 6px;">Ocorrências no mapa</div><div id="mapa-el"></div>
+    <div class="hint" style="margin-top:8px;padding:0 6px;">🟢 Resolvido &nbsp; 🟡 Aguardando &nbsp; 🟠 Alta prioridade &nbsp; 🔴 Emergencial</div>`;
   c.appendChild(card);
 
   const vistorias = getVistorias().filter(v=> v.lat && v.lng);
-  const map = L.map("mapa-el").setView(CENTER, 14);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(map);
+  const map = L.map("mapa-el", {zoomControl:true}).setView(CENTER, 15);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+    attribution: "© OpenStreetMap contributors © CARTO",
+    subdomains: "abcd",
+    maxZoom: 20
+  }).addTo(map);
 
   if(vistorias.length===0){
     const info = el("div","empty");
