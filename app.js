@@ -223,7 +223,7 @@ function renderVistoriaForm(levantamentoMode){
     <div id="suggestBox"></div>
 
     <label>Fotos</label>
-    <input type="file" id="fFotos" accept="image/*" capture="environment" multiple>
+    <input type="file" id="fFotos" accept="image/*" capture="environment">
     <div class="thumbs" id="fotosPreview"></div>
 
     <label>Vídeo curto (opcional)</label>
@@ -241,7 +241,11 @@ function renderVistoriaForm(levantamentoMode){
 
   let selCat = null, selSub = null;
 
-  document.getElementById("btnCancelar").addEventListener("click", ()=> render());
+  document.getElementById("btnCancelar").addEventListener("click", ()=>{
+    STATE.editingPhotos.forEach(item=> URL.revokeObjectURL(item.url));
+    STATE.editingPhotos = [];
+    render();
+  });
 
   function tentarGPS(){
     const res = document.getElementById("gpsResult");
@@ -304,33 +308,45 @@ function renderVistoriaForm(levantamentoMode){
     });
   }
 
+  const MAX_FOTOS = 8;
   document.getElementById("fFotos").addEventListener("change", async (e)=>{
-    const files = Array.from(e.target.files);
+    const file = e.target.files[0];
+    e.target.value = "";
+    if(!file) return;
+    if(STATE.editingPhotos.length >= MAX_FOTOS){
+      alert(`Limite de ${MAX_FOTOS} fotos por vistoria atingido. Remova alguma foto ou finalize e crie uma nova vistoria para o restante.`);
+      return;
+    }
     const preview = document.getElementById("fotosPreview");
     const status = el("div","hint"); status.id="fotosStatus";
     preview.parentNode.insertBefore(status, preview);
-    for(let i=0;i<files.length;i++){
-      status.textContent = `Processando foto ${i+1} de ${files.length}...`;
-      try{
-        const dataUrl = await compressImage(files[i]);
-        STATE.editingPhotos.push(dataUrl);
-      }catch(err){
-        console.error("Erro ao processar foto:", err);
-      }
+    status.textContent = "Processando foto...";
+    try{
+      const blob = await compressImageToBlob(file);
+      STATE.editingPhotos.push({ blob, url: URL.createObjectURL(blob) });
+    }catch(err){
+      console.error("Erro ao processar foto:", err);
+      alert("Não foi possível processar essa foto. Tente novamente.");
     }
     status.remove();
     renderFotosPreview();
-    e.target.value = "";
   });
   function renderFotosPreview(){
     const box = document.getElementById("fotosPreview");
     box.innerHTML = "";
-    STATE.editingPhotos.forEach((src, i)=>{
+    STATE.editingPhotos.forEach((item, i)=>{
       const d = el("div","thumb-x");
-      d.innerHTML = `<img class="thumb" src="${src}"><button data-i="${i}">×</button>`;
-      d.querySelector("button").addEventListener("click", ()=>{ STATE.editingPhotos.splice(i,1); renderFotosPreview(); });
+      d.innerHTML = `<img class="thumb" src="${item.url}"><button data-i="${i}">×</button>`;
+      d.querySelector("button").addEventListener("click", ()=>{
+        URL.revokeObjectURL(item.url);
+        STATE.editingPhotos.splice(i,1);
+        renderFotosPreview();
+      });
       box.appendChild(d);
     });
+    const countHint = el("div","hint");
+    countHint.textContent = `${STATE.editingPhotos.length} de ${MAX_FOTOS} fotos`;
+    box.parentNode.insertBefore(countHint, box.nextSibling);
   }
 
   let videoData = null;
@@ -339,12 +355,28 @@ function renderVistoriaForm(levantamentoMode){
     if(f){ videoData = f.name; document.getElementById("videoName").textContent = "🎥 " + f.name + " anexado (vídeos não são convertidos para reduzir o uso de armazenamento local)."; }
   });
 
-  document.getElementById("btnSalvar").addEventListener("click", ()=>{
+  function limparFotosEmEdicao(){
+    STATE.editingPhotos.forEach(item=> URL.revokeObjectURL(item.url));
+    STATE.editingPhotos = [];
+  }
+
+  document.getElementById("btnSalvar").addEventListener("click", async ()=>{
     const bairro = document.getElementById("fBairro").value.trim();
     const rua = document.getElementById("fRua").value.trim();
     if(!rua || !bairro){ alert("Informe ao menos o bairro e a rua."); return; }
     if(!selCat || !selSub){ alert("Selecione categoria e subcategoria."); return; }
+    const btnSalvar = document.getElementById("btnSalvar");
+    btnSalvar.disabled = true;
+    btnSalvar.textContent = "Salvando...";
     const rule = RULES[selSub] || {u:"Baixa",sec:"A definir",serv:"Avaliação técnica"};
+    let fotosBase64 = [];
+    try{
+      fotosBase64 = await Promise.all(STATE.editingPhotos.map(item=> blobToDataURL(item.blob)));
+    }catch(err){
+      alert("Erro ao preparar as fotos para salvar. Tente novamente.");
+      btnSalvar.disabled = false; btnSalvar.textContent = "💾 Salvar vistoria";
+      return;
+    }
     const rec = {
       id: uid(),
       timestamp: new Date().toISOString(),
@@ -357,14 +389,14 @@ function renderVistoriaForm(levantamentoMode){
       urgencia: rule.u, secretaria: rule.sec, servico: rule.serv,
       prazo: PRAZOS[rule.u],
       observacoes: document.getElementById("fObs").value.trim(),
-      fotos: STATE.editingPhotos.slice(),
+      fotos: fotosBase64,
       video: videoData,
       status: "Pendente",
       modo: levantamentoMode ? "levantamento" : "avulsa"
     };
     const arr = getVistorias(); arr.push(rec);
-    if(!saveVistorias(arr)) return;
-    STATE.editingPhotos = [];
+    if(!saveVistorias(arr)){ btnSalvar.disabled = false; btnSalvar.textContent = "💾 Salvar vistoria"; return; }
+    limparFotosEmEdicao();
     if(levantamentoMode){
       STATE.gps = null;
       renderVistoriaForm(true);
@@ -385,9 +417,11 @@ function blobToDataURL(blob){
 
 // Comprime evitando carregar a foto original inteira como texto base64 na memória
 // (fotos de câmeras atuais podem ter 10-15MB, o que travava o Chrome em aparelhos
-// com menos RAM). createImageBitmap decodifica direto do arquivo binário.
-async function compressImage(file){
-  const maxW = 900;
+// com menos RAM). createImageBitmap decodifica direto do arquivo binário, e o
+// resultado fica como Blob (mais leve para pré-visualização via object URL) —
+// só vira texto base64 no momento de salvar a vistoria.
+async function compressImageToBlob(file){
+  const maxW = 780;
   try{
     const bitmap = await createImageBitmap(file);
     const scale = Math.min(1, maxW / bitmap.width);
@@ -397,12 +431,12 @@ async function compressImage(file){
     const ctx = canvas.getContext("2d");
     ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
-    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.65));
-    if(blob) return await blobToDataURL(blob);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.6));
+    if(blob) return blob;
     throw new Error("toBlob falhou");
   }catch(e){
     // fallback para navegadores sem createImageBitmap (mais lento, mas funcional)
-    return new Promise((resolve)=>{
+    return new Promise((resolve, reject)=>{
       const reader = new FileReader();
       reader.onload = (ev)=>{
         const img = new Image();
@@ -413,11 +447,12 @@ async function compressImage(file){
           canvas.height = Math.round(img.height * scale);
           const ctx = canvas.getContext("2d");
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL("image/jpeg", 0.65));
+          canvas.toBlob(b=> b ? resolve(b) : reject(new Error("toBlob falhou")), "image/jpeg", 0.6);
         };
-        img.onerror = ()=> resolve(ev.target.result);
+        img.onerror = ()=> reject(new Error("Não foi possível decodificar a imagem."));
         img.src = ev.target.result;
       };
+      reader.onerror = reject;
       reader.readAsDataURL(file);
     });
   }
