@@ -195,7 +195,7 @@ function isAtrasada(v){
 }
 
 /* ---------- ESTADO ---------- */
-let STATE = { tab:"vistoria", editingPhotos: [], editingExistingFotos: [], editingId: null, gps:null, mapInstance:null, mapMarkers:[] };
+let STATE = { tab:"vistoria", editingPhotos: [], editingExistingFotos: [], editingId: null, gps:null, mapInstance:null, mapMarkers:[], buscaAberta:false, buscaTexto:"" };
 
 /* ---------- NAVEGAÇÃO ---------- */
 const TAB_TITLES = { vistoria:"Vistoria", mapa:"Mapa Interativo", dashboard:"Painel Gerencial", icv:"Índice de Conservação Viária", os:"Ordens de Serviço", relatorios:"Relatórios" };
@@ -210,7 +210,12 @@ function setTab(tab){
   render();
 }
 document.querySelectorAll(".nav-btn").forEach(b=> b.addEventListener("click", ()=> setTab(b.dataset.tab)) );
-document.getElementById("fabNew").addEventListener("click", ()=>{ STATE.editingPhotos=[]; STATE.editingExistingFotos=[]; STATE.editingId=null; STATE.gps=null; renderVistoriaForm(true); });
+document.getElementById("fabNew").addEventListener("click", ()=>{
+  if(STATE.tab !== "vistoria") return;
+  STATE.buscaAberta = true;
+  render();
+  requestAnimationFrame(()=>{ const inp = document.getElementById("inpBusca"); if(inp) inp.focus(); });
+});
 
 function render(){
   const c = document.getElementById("content");
@@ -228,7 +233,13 @@ function render(){
    ============================================================ */
 function renderVistoriaHome(){
   const c = document.getElementById("content");
-  const list = getVistorias().slice().reverse();
+  const listCompleta = getVistorias().slice().reverse();
+  const list = STATE.buscaTexto.trim()
+    ? listCompleta.filter(v=>{
+        const q = STATE.buscaTexto.trim().toLowerCase();
+        return (v.rua||"").toLowerCase().includes(q) || (v.bairro||"").toLowerCase().includes(q);
+      })
+    : listCompleta;
   const card = el("div");
 
   const servidor = getServidor();
@@ -255,14 +266,30 @@ function renderVistoriaHome(){
   startCard.querySelector("#btnLevantamento").addEventListener("click", ()=>{ STATE.editingPhotos=[]; STATE.editingExistingFotos=[]; STATE.editingId=null; STATE.gps=null; renderVistoriaForm(true); });
   card.appendChild(startCard);
 
+  if(STATE.buscaAberta){
+    const buscaCard = el("div","card");
+    buscaCard.innerHTML = `<div class="section-title">🔍 Buscar por rua ou bairro</div>
+      <div class="row">
+        <input id="inpBusca" placeholder="Ex: Centro, Rua XV..." value="${escapeHtml(STATE.buscaTexto)}">
+        <button class="btn btn-outline btn-sm" id="btnFecharBusca" style="width:auto;">✕</button>
+      </div>`;
+    buscaCard.querySelector("#inpBusca").addEventListener("input", (e)=>{ STATE.buscaTexto = e.target.value; render(); requestAnimationFrame(()=>{ const inp=document.getElementById("inpBusca"); if(inp){ inp.focus(); inp.selectionStart = inp.selectionEnd = inp.value.length; } }); });
+    buscaCard.querySelector("#btnFecharBusca").addEventListener("click", ()=>{ STATE.buscaAberta=false; STATE.buscaTexto=""; render(); });
+    card.appendChild(buscaCard);
+  }
+
   const countLabel = el("div","section-title");
-  countLabel.textContent = `Ocorrências registradas (${list.length})`;
+  countLabel.textContent = STATE.buscaTexto.trim()
+    ? `Resultados da busca (${list.length})`
+    : `Ocorrências registradas (${list.length})`;
   c.appendChild(card);
   c.appendChild(countLabel);
 
   if(list.length===0){
     const emptyCard = el("div","card");
-    emptyCard.innerHTML = `<div class="empty"><div class="big">📭</div>Nenhuma vistoria ainda.<br>Toque em "Nova vistoria" para começar.</div>`;
+    emptyCard.innerHTML = STATE.buscaTexto.trim()
+      ? `<div class="empty"><div class="big">🔍</div>Nenhuma vistoria encontrada para "${escapeHtml(STATE.buscaTexto)}".</div>`
+      : `<div class="empty"><div class="big">📭</div>Nenhuma vistoria ainda.<br>Toque em "Nova vistoria" para começar.</div>`;
     c.appendChild(emptyCard);
     return;
   }
