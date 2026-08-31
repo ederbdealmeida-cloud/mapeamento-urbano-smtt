@@ -317,27 +317,69 @@ function iniciarEdicaoVistoria(v){
 function renderVistoriaDetail(v){
   const c = document.getElementById("content");
   c.innerHTML = "";
-  const card = el("div","card");
-  card.innerHTML = `
-    <button class="btn btn-outline btn-sm" id="btnBack" style="width:auto;margin-bottom:12px;">← Voltar</button>
-    <h3>${escapeHtml(v.categoria)} · ${escapeHtml(v.subcategoria)}</h3>
-    <span class="badge ${badgeClass(v.urgencia)}">${v.urgencia} · prazo ${PRAZOS[v.urgencia]}</span>
+
+  const headerRow = el("div","detail-header-row");
+  headerRow.innerHTML = `<button class="back-btn" id="btnBack" title="Fechar">←</button>
+    <h3>${escapeHtml(v.categoria)} · ${escapeHtml(v.subcategoria)}</h3>`;
+  c.appendChild(headerRow);
+
+  if(v.fotos && v.fotos.length){
+    const imgCard = el("div","card");
+    imgCard.style.padding = "10px";
+    imgCard.innerHTML = `<div class="image-wrapper">
+        <img src="${v.fotos[0]}">
+        <span class="badge badge-float ${badgeClass(v.urgencia)}">Urgência ${v.urgencia}</span>
+      </div>`;
+    c.appendChild(imgCard);
+    if(v.fotos.length > 1){
+      const maisFotos = el("div","thumbs");
+      v.fotos.slice(1).forEach(f=>{ const img = el("img","thumb"); img.src = f; maisFotos.appendChild(img); });
+      imgCard.appendChild(maisFotos);
+    }
+  }
+
+  const infoCard = el("div","card");
+  infoCard.innerHTML = `
+    ${!(v.fotos && v.fotos.length) ? `<span class="badge ${badgeClass(v.urgencia)}">Urgência ${v.urgencia}</span>` : ""}
     ${isAtrasada(v) ? ` <span class="badge badge-emergencial">⏰ ATRASADA</span>` : ""}
-    <div class="kv"><span>Data</span><b>${fmtDate(v.timestamp)}</b></div>
-    <div class="kv"><span>Servidor</span><b>${escapeHtml(v.servidor||"—")}</b></div>
+    <div class="kv"><span>Local / Endereço</span><b>${escapeHtml(v.rua)}${v.numero? ", "+escapeHtml(v.numero):""}</b></div>
     <div class="kv"><span>Bairro</span><b>${escapeHtml(v.bairro)}</b></div>
-    <div class="kv"><span>Rua</span><b>${escapeHtml(v.rua)} ${escapeHtml(v.numero||"")}</b></div>
+    <div class="kv"><span>Tipo de ocorrência</span><b>${escapeHtml(v.subcategoria)}</b></div>
+    <div class="kv"><span>Data e hora do registro</span><b>${fmtDate(v.timestamp)}</b></div>
+    <div class="kv"><span>Servidor responsável</span><b>${escapeHtml(v.servidor||"—")}</b></div>
     <div class="kv"><span>Coordenadas GPS</span><b>${v.lat? v.lat.toFixed(5)+", "+v.lng.toFixed(5) : "não capturado"}</b></div>
     <div class="kv"><span>Secretaria responsável</span><b>${escapeHtml(v.secretaria)}</b></div>
     <div class="kv"><span>Serviço sugerido</span><b>${escapeHtml(v.servico)}</b></div>
-    <div class="kv"><span>Status</span><b>${v.status}</b></div>
-    ${v.observacoes? `<label>Observações</label><div>${escapeHtml(v.observacoes)}</div>`:""}
-    ${v.fotos && v.fotos.length? `<label>Fotos</label><div class="thumbs">${v.fotos.map(f=>`<img class="thumb" style="width:90px;height:90px;" src="${f}">`).join("")}</div>`:""}
-    <button class="btn btn-primary" id="btnEditarDetalhe" style="margin-top:14px;">✏️ Editar esta vistoria</button>
+    <div class="kv"><span>Status atual</span><b>${v.status}</b></div>
+    ${v.observacoes? `<div class="kv"><span>Observações</span><b style="font-weight:500;">${escapeHtml(v.observacoes)}</b></div>`:""}
   `;
-  card.querySelector("#btnBack").addEventListener("click", ()=> render());
-  card.querySelector("#btnEditarDetalhe").addEventListener("click", ()=> iniciarEdicaoVistoria(v));
-  c.appendChild(card);
+  c.appendChild(infoCard);
+
+  const actionsRow = el("div","row");
+  actionsRow.style.marginBottom = "10px";
+  actionsRow.innerHTML = `
+    <button class="btn btn-outline" id="btnEditarDetalhe">✏️ Editar Dados</button>
+    <button class="btn btn-primary" id="btnGerarOSDetalhe">🔧 Gerar OS</button>`;
+  c.appendChild(actionsRow);
+
+  const btnStatus = el("button","btn " + (v.status==="Concluído" ? "btn-outline" : "btn-success"));
+  btnStatus.id = "btnStatusDetalhe";
+  btnStatus.textContent = v.status==="Concluído" ? "↺ Reabrir vistoria" : "✓ Marcar como Concluída";
+  c.appendChild(btnStatus);
+
+  headerRow.querySelector("#btnBack").addEventListener("click", ()=> render());
+  actionsRow.querySelector("#btnEditarDetalhe").addEventListener("click", ()=> iniciarEdicaoVistoria(v));
+  actionsRow.querySelector("#btnGerarOSDetalhe").addEventListener("click", ()=>{ gerarOSDeVistoria(v); setTab("os"); });
+  btnStatus.addEventListener("click", ()=>{
+    const arr = getVistorias();
+    const idx = arr.findIndex(x=> x.id === v.id);
+    if(idx<0) return;
+    arr[idx].status = arr[idx].status==="Concluído" ? "Pendente" : "Concluído";
+    arr[idx]._pendingSync = true;
+    saveVistorias(arr);
+    sincronizarTudo(true);
+    renderVistoriaDetail(arr[idx]);
+  });
 }
 
 function renderVistoriaForm(levantamentoMode, editRecord){
@@ -695,7 +737,8 @@ async function renderMapa(){
       new Promise((_,reject)=> setTimeout(()=> reject(new Error("O Google Maps demorou demais para responder. Verifique sua conexão com a internet e tente novamente.")), 12000))
     ]);
   }catch(e){
-    document.getElementById("mapa-el").innerHTML = `<div class="empty" style="width:100%;"><div class="big">⚠️</div>${escapeHtml(e.message)}</div>`;
+    const mapaElErro = document.getElementById("mapa-el");
+    if(mapaElErro) mapaElErro.innerHTML = `<div class="empty" style="width:100%;"><div class="big">⚠️</div>${escapeHtml(e.message)}</div>`;
     return;
   }
   if(STATE.tab !== "mapa") return; // usuário já saiu da aba enquanto carregava
@@ -756,6 +799,7 @@ async function renderMapa(){
           ${escapeHtml(v.categoria)} · ${escapeHtml(v.subcategoria)}<br>
           Status: <b>${v.status}</b><br>
           ${v.fotos && v.fotos[0] ? `<img src="${v.fotos[0]}" style="width:100%;border-radius:6px;margin-top:6px;">` : ""}
+          <button onclick="window.__abrirDetalheDoMapa('${v.id}')" style="margin-top:8px;width:100%;min-height:36px;background:#FF7700;color:#fff;border:none;border-radius:6px;font-weight:600;font-size:13px;cursor:pointer;">Ver detalhes completos</button>
         </div>
       `);
       infoWindow.open(map, marker);
@@ -764,6 +808,10 @@ async function renderMapa(){
 
   if(vistorias.length > 1) map.fitBounds(bounds, 40);
 }
+window.__abrirDetalheDoMapa = function(id){
+  const v = getVistorias().find(x=> x.id === id);
+  if(v) renderVistoriaDetail(v);
+};
 
 /* ============================================================
    MÓDULO — DASHBOARD GERENCIAL
