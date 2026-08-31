@@ -65,6 +65,102 @@ const ICV_WEIGHTS = {"Pavimentação":40,"Drenagem":25,"Sinalização":20,"Acess
 const URG_PENALTY = {"Emergencial":0.28,"Alta":0.16,"Média":0.08,"Baixa":0.03};
 const CENTER = [-29.876, -54.822]; // Cacequi, RS
 
+/* ============================================================
+   SINCRONIZAÇÃO COM FIREBASE (Firestore REST API)
+   Reaproveita o mesmo projeto Firebase do SGSS-SMTT, em
+   coleções próprias para não interferir nos dados do SGSS.
+   ============================================================ */
+const FIREBASE_CONFIG = { apiKey: "AIzaSyAbJ38elShzDuBtt0vLcNSawm6AlXfnzWs", projectId: "smtt-cacequi" };
+const FS_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
+const COL_VISTORIAS = "mapeamento_urbano_vistorias";
+const COL_OS = "mapeamento_urbano_os";
+let SYNC_STATE = { syncing:false, lastError:null, lastSync:null };
+
+function fsDocUrl(col, id){ return `${FS_BASE}/${col}/${encodeURIComponent(id)}?key=${FIREBASE_CONFIG.apiKey}`; }
+function fsListUrl(col, pageToken){
+  let u = `${FS_BASE}/${col}?key=${FIREBASE_CONFIG.apiKey}&pageSize=300`;
+  if(pageToken) u += `&pageToken=${encodeURIComponent(pageToken)}`;
+  return u;
+}
+async function fsUpsert(col, id, obj){
+  const body = { fields: { json: { stringValue: JSON.stringify(obj) }, atualizadoEm: { timestampValue: new Date().toISOString() } } };
+  const res = await fetch(fsDocUrl(col, id), { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if(!res.ok) throw new Error("Falha ao enviar ao Firestore (" + res.status + ")");
+  return res.json();
+}
+async function fsListAll(col){
+  let all = [], pageToken = null;
+  do{
+    const res = await fetch(fsListUrl(col, pageToken));
+    if(!res.ok) throw new Error("Falha ao consultar o Firestore (" + res.status + ")");
+    const data = await res.json();
+    (data.documents||[]).forEach(doc=>{
+      try{
+        const json = doc.fields && doc.fields.json && doc.fields.json.stringValue;
+        if(json) all.push(JSON.parse(json));
+      }catch(e){}
+    });
+    pageToken = data.nextPageToken || null;
+  } while(pageToken);
+  return all;
+}
+function mesclarPorChave(local, remoto, chave){
+  const map = {};
+  local.forEach(item=> map[item[chave]] = item);
+  remoto.forEach(item=>{
+    const existente = map[item[chave]];
+    if(!existente){ map[item[chave]] = item; return; }
+    if(existente._pendingSync) return; // mudança local ainda não enviada tem prioridade
+    const tLocal = existente.timestamp || existente.data || "";
+    const tRemoto = item.timestamp || item.data || "";
+    if(tRemoto > tLocal) map[item[chave]] = item;
+  });
+  return Object.values(map);
+}
+function updateSyncIndicator(status){
+  const dot = document.getElementById("syncdot");
+  if(!dot) return;
+  dot.classList.remove("off","syncing","error");
+  if(status==="offline"){ dot.classList.add("off"); dot.title="Offline — as alterações serão enviadas quando houver internet"; }
+  else if(status==="syncing"){ dot.classList.add("syncing"); dot.title="Sincronizando..."; }
+  else if(status==="error"){ dot.classList.add("error"); dot.title="Erro ao sincronizar: " + (SYNC_STATE.lastError||""); }
+  else { dot.title = "Sincronizado com os demais servidores"; }
+}
+async function sincronizarTudo(silent){
+  if(SYNC_STATE.syncing) return;
+  if(!navigator.onLine){ updateSyncIndicator("offline"); return; }
+  SYNC_STATE.syncing = true;
+  updateSyncIndicator("syncing");
+  try{
+    let vistorias = getVistorias(), mudouV = false;
+    for(const v of vistorias){ if(v._pendingSync){ await fsUpsert(COL_VISTORIAS, v.id, v); delete v._pendingSync; mudouV = true; } }
+    if(mudouV) saveVistorias(vistorias);
+
+    let osArr = getOS(), mudouO = false;
+    for(const o of osArr){ if(o._pendingSync){ await fsUpsert(COL_OS, o.numero, o); delete o._pendingSync; mudouO = true; } }
+    if(mudouO) saveOS(osArr);
+
+    const remotoVistorias = await fsListAll(COL_VISTORIAS);
+    const remotoOS = await fsListAll(COL_OS);
+    saveVistorias(mesclarPorChave(getVistorias(), remotoVistorias, "id"));
+    saveOS(mesclarPorChave(getOS(), remotoOS, "numero"));
+
+    SYNC_STATE.lastError = null;
+    SYNC_STATE.lastSync = new Date();
+    updateSyncIndicator("online");
+    if(!silent) render();
+  }catch(e){
+    console.error("Erro de sincronização:", e);
+    SYNC_STATE.lastError = e.message;
+    updateSyncIndicator("error");
+  }finally{
+    SYNC_STATE.syncing = false;
+  }
+}
+window.addEventListener("online", ()=> sincronizarTudo(true));
+window.addEventListener("offline", ()=> updateSyncIndicator("offline"));
+
+
 /* ---------- STORAGE ---------- */
 const DB = {
   get(key, fallback){ try{ const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }catch(e){ return fallback; } },
@@ -86,9 +182,16 @@ function markerColor(v){
   if(v.urgencia === "Alta") return "#F97316";
   return "#EAB308";
 }
+const PRAZO_DIAS = {"Baixa":30,"Média":15,"Alta":7,"Emergencial":1};
+function isAtrasada(v){
+  if(v.status === "Concluído") return false;
+  const dias = PRAZO_DIAS[v.urgencia] || 30;
+  const limite = new Date(v.timestamp).getTime() + dias*86400000;
+  return Date.now() > limite;
+}
 
 /* ---------- ESTADO ---------- */
-let STATE = { tab:"vistoria", editingPhotos: [], gps:null, mapInstance:null, mapMarkers:[] };
+let STATE = { tab:"vistoria", editingPhotos: [], editingExistingFotos: [], editingId: null, gps:null, mapInstance:null, mapMarkers:[] };
 
 /* ---------- NAVEGAÇÃO ---------- */
 const TAB_TITLES = { vistoria:"Vistoria", mapa:"Mapa Interativo", dashboard:"Painel Gerencial", icv:"Índice de Conservação Viária", os:"Ordens de Serviço", relatorios:"Relatórios" };
@@ -101,7 +204,7 @@ function setTab(tab){
   render();
 }
 document.querySelectorAll(".nav-btn").forEach(b=> b.addEventListener("click", ()=> setTab(b.dataset.tab)) );
-document.getElementById("fabNew").addEventListener("click", ()=>{ STATE.editingPhotos=[]; STATE.gps=null; renderVistoriaForm(true); });
+document.getElementById("fabNew").addEventListener("click", ()=>{ STATE.editingPhotos=[]; STATE.editingExistingFotos=[]; STATE.editingId=null; STATE.gps=null; renderVistoriaForm(true); });
 
 function render(){
   const c = document.getElementById("content");
@@ -125,8 +228,15 @@ function renderVistoriaHome(){
   const servidor = getServidor();
   const idCard = el("div","card");
   idCard.innerHTML = `<div class="section-title">Servidor responsável</div>
-    <input id="inpServidorTop" placeholder="Seu nome" value="${escapeHtml(servidor)}">`;
-  idCard.querySelector("#inpServidorTop").addEventListener("change", e=> setServidor(e.target.value));
+    <div class="row">
+      <div><b>${escapeHtml(servidor)}</b></div>
+      <button class="btn btn-outline btn-sm" id="btnTrocarUsuario" style="width:auto;">🔁 Trocar usuário</button>
+    </div>
+    <button class="btn btn-outline btn-sm" id="btnSincronizarAgora" style="margin-top:10px;">🔄 Sincronizar agora</button>`;
+  idCard.querySelector("#btnTrocarUsuario").addEventListener("click", ()=>{
+    if(confirm("Trocar de usuário? Você vai precisar informar o nome novamente.")){ setServidor(""); renderLoginGate(); }
+  });
+  idCard.querySelector("#btnSincronizarAgora").addEventListener("click", ()=> sincronizarTudo(false));
   card.appendChild(idCard);
 
   const startCard = el("div","card");
@@ -135,8 +245,8 @@ function renderVistoriaHome(){
       <button class="btn btn-outline" id="btnLevantamento">🚩 Modo levantamento</button>
     </div>
     <div class="hint">O modo levantamento mantém o formulário aberto para fotografar rua por rua sem sair da tela, útil para o "Levantamento Completo da Cidade".</div>`;
-  startCard.querySelector("#btnNovaVistoria").addEventListener("click", ()=>{ STATE.editingPhotos=[]; STATE.gps=null; renderVistoriaForm(false); });
-  startCard.querySelector("#btnLevantamento").addEventListener("click", ()=>{ STATE.editingPhotos=[]; STATE.gps=null; renderVistoriaForm(true); });
+  startCard.querySelector("#btnNovaVistoria").addEventListener("click", ()=>{ STATE.editingPhotos=[]; STATE.editingExistingFotos=[]; STATE.editingId=null; STATE.gps=null; renderVistoriaForm(false); });
+  startCard.querySelector("#btnLevantamento").addEventListener("click", ()=>{ STATE.editingPhotos=[]; STATE.editingExistingFotos=[]; STATE.editingId=null; STATE.gps=null; renderVistoriaForm(true); });
   card.appendChild(startCard);
 
   const listCard = el("div","card");
@@ -145,18 +255,23 @@ function renderVistoriaHome(){
     listCard.innerHTML += `<div class="empty"><div class="big">📭</div>Nenhuma vistoria ainda.<br>Toque em "Nova vistoria" para começar.</div>`;
   } else {
     list.slice(0,50).forEach(v=>{
+      const atrasada = isAtrasada(v);
       const li = el("div","list-item");
       li.innerHTML = `<div class="li-top">
           <div>
             <div class="li-title">${escapeHtml(v.rua)}${v.numero? ", "+escapeHtml(v.numero):""}</div>
             <div class="li-sub">${escapeHtml(v.bairro)} · ${escapeHtml(v.subcategoria)}</div>
           </div>
-          <span class="badge ${badgeClass(v.urgencia)}">${v.urgencia}</span>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+            <span class="badge ${badgeClass(v.urgencia)}">${v.urgencia}</span>
+            ${atrasada ? `<span class="badge badge-emergencial">⏰ ATRASADA</span>` : ""}
+          </div>
         </div>
         <div class="li-sub">${fmtDate(v.timestamp)} · ${escapeHtml(v.servidor||"—")} · <b>${v.status}</b></div>
         ${v.fotos && v.fotos.length ? `<div class="thumbs">${v.fotos.slice(0,4).map(f=>`<img class="thumb" src="${f}">`).join("")}</div>` : ""}
-        <div class="row" style="margin-top:8px;">
-          <button class="btn btn-outline btn-sm" data-act="ver" data-id="${v.id}">Ver detalhes</button>
+        <div class="row" style="margin-top:8px;flex-wrap:wrap;">
+          <button class="btn btn-outline btn-sm" data-act="ver" data-id="${v.id}">Ver</button>
+          <button class="btn btn-outline btn-sm" data-act="editar" data-id="${v.id}">Editar</button>
           <button class="btn btn-outline btn-sm" data-act="os" data-id="${v.id}">Gerar OS</button>
           <button class="btn btn-outline btn-sm" data-act="concluir" data-id="${v.id}">${v.status==="Concluído"?"Reabrir":"Concluir"}</button>
         </div>`;
@@ -170,12 +285,21 @@ function renderVistoriaHome(){
       const idx = arr.findIndex(x=>x.id===id);
       if(idx<0) return;
       if(btn.dataset.act==="ver") renderVistoriaDetail(arr[idx]);
-      if(btn.dataset.act==="concluir"){ arr[idx].status = arr[idx].status==="Concluído" ? "Pendente" : "Concluído"; saveVistorias(arr); render(); }
+      if(btn.dataset.act==="editar") iniciarEdicaoVistoria(arr[idx]);
+      if(btn.dataset.act==="concluir"){ arr[idx].status = arr[idx].status==="Concluído" ? "Pendente" : "Concluído"; arr[idx]._pendingSync = true; saveVistorias(arr); render(); sincronizarTudo(true); }
       if(btn.dataset.act==="os"){ gerarOSDeVistoria(arr[idx]); setTab("os"); }
     });
   }
   card.appendChild(listCard);
   c.appendChild(card);
+}
+
+function iniciarEdicaoVistoria(v){
+  STATE.editingPhotos = [];
+  STATE.editingExistingFotos = (v.fotos||[]).slice();
+  STATE.editingId = v.id;
+  STATE.gps = (v.lat && v.lng) ? {lat:v.lat, lng:v.lng} : null;
+  renderVistoriaForm(false, v);
 }
 
 function renderVistoriaDetail(v){
@@ -186,6 +310,7 @@ function renderVistoriaDetail(v){
     <button class="btn btn-outline btn-sm" id="btnBack" style="width:auto;margin-bottom:12px;">← Voltar</button>
     <h3>${escapeHtml(v.categoria)} · ${escapeHtml(v.subcategoria)}</h3>
     <span class="badge ${badgeClass(v.urgencia)}">${v.urgencia} · prazo ${PRAZOS[v.urgencia]}</span>
+    ${isAtrasada(v) ? ` <span class="badge badge-emergencial">⏰ ATRASADA</span>` : ""}
     <div class="kv"><span>Data</span><b>${fmtDate(v.timestamp)}</b></div>
     <div class="kv"><span>Servidor</span><b>${escapeHtml(v.servidor||"—")}</b></div>
     <div class="kv"><span>Bairro</span><b>${escapeHtml(v.bairro)}</b></div>
@@ -196,25 +321,29 @@ function renderVistoriaDetail(v){
     <div class="kv"><span>Status</span><b>${v.status}</b></div>
     ${v.observacoes? `<label>Observações</label><div>${escapeHtml(v.observacoes)}</div>`:""}
     ${v.fotos && v.fotos.length? `<label>Fotos</label><div class="thumbs">${v.fotos.map(f=>`<img class="thumb" style="width:90px;height:90px;" src="${f}">`).join("")}</div>`:""}
+    <button class="btn btn-primary" id="btnEditarDetalhe" style="margin-top:14px;">✏️ Editar esta vistoria</button>
   `;
   card.querySelector("#btnBack").addEventListener("click", ()=> render());
+  card.querySelector("#btnEditarDetalhe").addEventListener("click", ()=> iniciarEdicaoVistoria(v));
   c.appendChild(card);
 }
 
-function renderVistoriaForm(levantamentoMode){
+function renderVistoriaForm(levantamentoMode, editRecord){
   const c = document.getElementById("content");
   c.innerHTML = "";
   const wrap = el("div");
+  const isEdicao = !!editRecord;
 
   const form = el("div","card");
   form.innerHTML = `
     <button class="btn btn-outline btn-sm" id="btnCancelar" style="width:auto;margin-bottom:12px;">← Voltar</button>
+    ${isEdicao ? `<div class="hint" style="margin-bottom:10px;">✏️ Editando vistoria existente</div>` : ""}
     <div class="section-title">Localização</div>
-    <button class="btn btn-dark" id="btnGPS" type="button">📍 Capturar GPS</button>
-    <div id="gpsResult" class="hint"></div>
-    <label>Bairro</label><input id="fBairro" placeholder="Ex: Centro">
-    <label>Rua</label><input id="fRua" placeholder="Ex: Rua XV de Novembro">
-    <label>Número aproximado</label><input id="fNumero" placeholder="Ex: 450 (opcional)">
+    <button class="btn btn-dark" id="btnGPS" type="button">📍 ${isEdicao && STATE.gps ? "Atualizar" : "Capturar"} GPS</button>
+    <div id="gpsResult" class="hint">${isEdicao && STATE.gps ? `✅ ${STATE.gps.lat.toFixed(5)}, ${STATE.gps.lng.toFixed(5)}` : ""}</div>
+    <label>Bairro</label><input id="fBairro" placeholder="Ex: Centro" value="${isEdicao ? escapeHtml(editRecord.bairro) : ""}">
+    <label>Rua</label><input id="fRua" placeholder="Ex: Rua XV de Novembro" value="${isEdicao ? escapeHtml(editRecord.rua) : ""}">
+    <label>Número aproximado</label><input id="fNumero" placeholder="Ex: 450 (opcional)" value="${isEdicao ? escapeHtml(editRecord.numero||"") : ""}">
 
     <div class="section-title" style="margin-top:18px;">Categoria da ocorrência</div>
     <div class="chip-group" id="chipsCat"></div>
@@ -228,22 +357,25 @@ function renderVistoriaForm(levantamentoMode){
 
     <label>Vídeo curto (opcional)</label>
     <input type="file" id="fVideo" accept="video/*" capture="environment">
-    <div id="videoName" class="hint"></div>
+    <div id="videoName" class="hint">${isEdicao && editRecord.video ? "🎥 " + escapeHtml(editRecord.video) + " (já anexado)" : ""}</div>
 
     <label>Observações técnicas</label>
-    <textarea id="fObs" placeholder="Detalhes adicionais sobre a ocorrência..."></textarea>
+    <textarea id="fObs" placeholder="Detalhes adicionais sobre a ocorrência...">${isEdicao ? escapeHtml(editRecord.observacoes||"") : ""}</textarea>
 
-    <button class="btn btn-primary" id="btnSalvar" style="margin-top:16px;">💾 Salvar vistoria</button>
-    ${levantamentoMode ? `<div class="hint">Modo levantamento ativo: após salvar, o formulário reabre automaticamente para a próxima rua.</div>`:""}
+    <button class="btn btn-primary" id="btnSalvar" style="margin-top:16px;">💾 ${isEdicao ? "Salvar alterações" : "Salvar vistoria"}</button>
+    ${levantamentoMode && !isEdicao ? `<div class="hint">Modo levantamento ativo: após salvar, o formulário reabre automaticamente para a próxima rua.</div>`:""}
   `;
   wrap.appendChild(form);
   c.appendChild(wrap);
 
-  let selCat = null, selSub = null;
+  let selCat = isEdicao ? editRecord.categoria : null;
+  let selSub = isEdicao ? editRecord.subcategoria : null;
 
   document.getElementById("btnCancelar").addEventListener("click", ()=>{
     STATE.editingPhotos.forEach(item=> URL.revokeObjectURL(item.url));
     STATE.editingPhotos = [];
+    STATE.editingExistingFotos = [];
+    STATE.editingId = null;
     render();
   });
 
@@ -274,6 +406,7 @@ function renderVistoriaForm(levantamentoMode){
   const chipsCat = document.getElementById("chipsCat");
   Object.keys(CATS).forEach(cat=>{
     const chip = el("button","chip"); chip.type="button"; chip.textContent = cat;
+    if(isEdicao && cat === selCat) chip.classList.add("active");
     chip.addEventListener("click", ()=>{
       selCat = cat; selSub = null;
       chipsCat.querySelectorAll(".chip").forEach(x=>x.classList.remove("active"));
@@ -284,12 +417,13 @@ function renderVistoriaForm(levantamentoMode){
     chipsCat.appendChild(chip);
   });
 
-  function renderSubchips(cat){
+  function renderSubchips(cat, preSelectSub){
     const box = document.getElementById("chipsSub");
     box.innerHTML = `<label>Subcategoria</label><div class="chip-group" id="chipsSub2"></div>`;
     const g = document.getElementById("chipsSub2");
     CATS[cat].forEach(sub=>{
       const chip = el("button","chip"); chip.type="button"; chip.textContent = sub;
+      if(preSelectSub && sub === preSelectSub) chip.classList.add("active");
       chip.addEventListener("click", ()=>{
         selSub = sub;
         g.querySelectorAll(".chip").forEach(x=>x.classList.remove("active"));
@@ -308,12 +442,25 @@ function renderVistoriaForm(levantamentoMode){
     });
   }
 
+  if(isEdicao && selCat){
+    renderSubchips(selCat, selSub);
+    const rule = RULES[selSub] || {u:"Baixa",sec:"A definir",serv:"Avaliação técnica"};
+    document.getElementById("suggestBox").innerHTML = `
+      <div class="suggest-box">
+        <b>🤖 Assistente interno sugere:</b>
+        <div class="kv"><span>Categoria</span><b>${selCat}</b></div>
+        <div class="kv"><span>Urgência</span><b>${rule.u} (prazo ${PRAZOS[rule.u]})</b></div>
+        <div class="kv"><span>Secretaria responsável</span><b>${rule.sec}</b></div>
+        <div class="kv"><span>Serviço necessário</span><b>${rule.serv}</b></div>
+      </div>`;
+  }
+
   const MAX_FOTOS = 8;
   document.getElementById("fFotos").addEventListener("change", async (e)=>{
     const file = e.target.files[0];
     e.target.value = "";
     if(!file) return;
-    if(STATE.editingPhotos.length >= MAX_FOTOS){
+    if(STATE.editingExistingFotos.length + STATE.editingPhotos.length >= MAX_FOTOS){
       alert(`Limite de ${MAX_FOTOS} fotos por vistoria atingido. Remova alguma foto ou finalize e crie uma nova vistoria para o restante.`);
       return;
     }
@@ -334,9 +481,18 @@ function renderVistoriaForm(levantamentoMode){
   function renderFotosPreview(){
     const box = document.getElementById("fotosPreview");
     box.innerHTML = "";
+    STATE.editingExistingFotos.forEach((src, i)=>{
+      const d = el("div","thumb-x");
+      d.innerHTML = `<img class="thumb" src="${src}"><button data-existing="${i}">×</button>`;
+      d.querySelector("button").addEventListener("click", ()=>{
+        STATE.editingExistingFotos.splice(i,1);
+        renderFotosPreview();
+      });
+      box.appendChild(d);
+    });
     STATE.editingPhotos.forEach((item, i)=>{
       const d = el("div","thumb-x");
-      d.innerHTML = `<img class="thumb" src="${item.url}"><button data-i="${i}">×</button>`;
+      d.innerHTML = `<img class="thumb" src="${item.url}"><button data-new="${i}">×</button>`;
       d.querySelector("button").addEventListener("click", ()=>{
         URL.revokeObjectURL(item.url);
         STATE.editingPhotos.splice(i,1);
@@ -344,12 +500,14 @@ function renderVistoriaForm(levantamentoMode){
       });
       box.appendChild(d);
     });
+    const totalFotos = STATE.editingExistingFotos.length + STATE.editingPhotos.length;
     const countHint = el("div","hint");
-    countHint.textContent = `${STATE.editingPhotos.length} de ${MAX_FOTOS} fotos`;
+    countHint.textContent = `${totalFotos} de ${MAX_FOTOS} fotos`;
     box.parentNode.insertBefore(countHint, box.nextSibling);
   }
+  if(isEdicao) renderFotosPreview();
 
-  let videoData = null;
+  let videoData = isEdicao ? (editRecord.video || null) : null;
   document.getElementById("fVideo").addEventListener("change", (e)=>{
     const f = e.target.files[0];
     if(f){ videoData = f.name; document.getElementById("videoName").textContent = "🎥 " + f.name + " anexado (vídeos não são convertidos para reduzir o uso de armazenamento local)."; }
@@ -358,6 +516,7 @@ function renderVistoriaForm(levantamentoMode){
   function limparFotosEmEdicao(){
     STATE.editingPhotos.forEach(item=> URL.revokeObjectURL(item.url));
     STATE.editingPhotos = [];
+    STATE.editingExistingFotos = [];
   }
 
   document.getElementById("btnSalvar").addEventListener("click", async ()=>{
@@ -369,18 +528,16 @@ function renderVistoriaForm(levantamentoMode){
     btnSalvar.disabled = true;
     btnSalvar.textContent = "Salvando...";
     const rule = RULES[selSub] || {u:"Baixa",sec:"A definir",serv:"Avaliação técnica"};
-    let fotosBase64 = [];
+    let novasFotosBase64 = [];
     try{
-      fotosBase64 = await Promise.all(STATE.editingPhotos.map(item=> blobToDataURL(item.blob)));
+      novasFotosBase64 = await Promise.all(STATE.editingPhotos.map(item=> blobToDataURL(item.blob)));
     }catch(err){
       alert("Erro ao preparar as fotos para salvar. Tente novamente.");
-      btnSalvar.disabled = false; btnSalvar.textContent = "💾 Salvar vistoria";
+      btnSalvar.disabled = false; btnSalvar.textContent = isEdicao ? "💾 Salvar alterações" : "💾 Salvar vistoria";
       return;
     }
-    const rec = {
-      id: uid(),
-      timestamp: new Date().toISOString(),
-      servidor: getServidor(),
+    const fotosFinais = STATE.editingExistingFotos.concat(novasFotosBase64);
+    const camposComuns = {
       bairro, rua,
       numero: document.getElementById("fNumero").value.trim(),
       lat: STATE.gps ? STATE.gps.lat : null,
@@ -389,15 +546,31 @@ function renderVistoriaForm(levantamentoMode){
       urgencia: rule.u, secretaria: rule.sec, servico: rule.serv,
       prazo: PRAZOS[rule.u],
       observacoes: document.getElementById("fObs").value.trim(),
-      fotos: fotosBase64,
+      fotos: fotosFinais,
       video: videoData,
-      status: "Pendente",
-      modo: levantamentoMode ? "levantamento" : "avulsa"
+      _pendingSync: true
     };
-    const arr = getVistorias(); arr.push(rec);
-    if(!saveVistorias(arr)){ btnSalvar.disabled = false; btnSalvar.textContent = "💾 Salvar vistoria"; return; }
+    const arr = getVistorias();
+    if(isEdicao){
+      const idx = arr.findIndex(x=> x.id === STATE.editingId);
+      if(idx>=0){
+        arr[idx] = { ...arr[idx], ...camposComuns, editadoEm: new Date().toISOString() };
+      }
+    } else {
+      arr.push({
+        id: uid(),
+        timestamp: new Date().toISOString(),
+        servidor: getServidor(),
+        status: "Pendente",
+        modo: levantamentoMode ? "levantamento" : "avulsa",
+        ...camposComuns
+      });
+    }
+    if(!saveVistorias(arr)){ btnSalvar.disabled = false; btnSalvar.textContent = isEdicao ? "💾 Salvar alterações" : "💾 Salvar vistoria"; return; }
     limparFotosEmEdicao();
-    if(levantamentoMode){
+    STATE.editingId = null;
+    sincronizarTudo(true);
+    if(levantamentoMode && !isEdicao){
       STATE.gps = null;
       renderVistoriaForm(true);
     } else {
@@ -616,6 +789,15 @@ function renderDashboard(){
   planoCard.querySelector("#btnPlano").addEventListener("click", gerarPlanoRecuperacao);
   c.appendChild(planoCard);
 
+  const diagCard = el("div","card");
+  diagCard.style.marginTop="14px";
+  const totalLevantamento = vistorias.filter(v=> v.modo==="levantamento").length;
+  diagCard.innerHTML = `<div class="section-title">Levantamento Completo da Cidade</div>
+    <div class="hint">${totalLevantamento} ocorrência(s) registradas em modo levantamento. Gera o diagnóstico geral da infraestrutura com ranking de prioridades para investimento.</div>
+    <button class="btn btn-dark" id="btnDiagnostico" style="margin-top:10px;">📋 Ver Diagnóstico do Levantamento</button>`;
+  diagCard.querySelector("#btnDiagnostico").addEventListener("click", gerarDiagnosticoLevantamento);
+  c.appendChild(diagCard);
+
   if(vistorias.length===0){
     const empty = el("div","card");
     empty.innerHTML = `<div class="empty"><div class="big">📊</div>Registre vistorias para ver os gráficos aqui.</div>`;
@@ -660,6 +842,44 @@ function renderDashboard(){
   for(let i=13;i>=0;i--){ const d = new Date(); d.setDate(d.getDate()-i); days.push(d.toISOString().slice(0,10)); }
   const counts = days.map(day=> vistorias.filter(v=> v.timestamp.slice(0,10)===day).length );
   new Chart(document.getElementById("chTempo"), { type:"line", data:{ labels:days.map(d=>d.slice(5)), datasets:[{ data:counts, borderColor:"#FF7A00", backgroundColor:"rgba(255,122,0,0.15)", fill:true, tension:0.3 }]}, options:{ plugins:{legend:{display:false}} }});
+}
+
+function gerarDiagnosticoLevantamento(){
+  const registros = getVistorias().filter(v=> v.modo==="levantamento");
+  if(registros.length===0){ alert("Nenhuma ocorrência foi registrada em modo levantamento ainda. Use o botão \"🚩 Modo levantamento\" na tela de Vistoria."); return; }
+
+  const c = document.getElementById("content");
+  c.innerHTML = "";
+  const card = el("div","card");
+
+  const porCategoria = {};
+  registros.forEach(v=> porCategoria[v.categoria] = (porCategoria[v.categoria]||0)+1);
+
+  // ICV restrito às ruas com registros de levantamento
+  const ruasSet = new Set(registros.map(v=> v.bairro+"|"+v.rua));
+  const icvCompleto = calcularICV();
+  const icvLevantamento = icvCompleto.filter(r=> ruasSet.has(r.bairro+"|"+r.rua));
+
+  let html = `<button class="btn btn-outline btn-sm noprint" id="btnBackDiag" style="width:auto;margin-bottom:10px;">← Voltar</button>
+    <button class="btn btn-dark noprint" id="btnImprimirDiag" style="width:auto;margin-bottom:14px;margin-left:8px;">🖨️ Imprimir / Salvar PDF</button>
+    <h2>Diagnóstico — Levantamento Completo da Cidade</h2>
+    <div class="hint">Gerado em ${fmtDate(new Date().toISOString())} · ${registros.length} ocorrências · ${ruasSet.size} rua(s) percorridas</div>
+
+    <h3 style="margin-top:20px;">Condição por categoria</h3>
+    <table class="rep"><tr><th>Categoria</th><th>Ocorrências</th></tr>
+      ${Object.keys(porCategoria).map(cat=> `<tr><td>${escapeHtml(cat)}</td><td>${porCategoria[cat]}</td></tr>`).join("")}
+    </table>
+
+    <h3 style="margin-top:20px;">Ranking de prioridades para investimento</h3>
+    <div class="hint">Ruas percorridas no levantamento, ordenadas da pior para a melhor condição (ICV).</div>
+    <table class="rep"><tr><th>Ordem</th><th>Rua</th><th>Bairro</th><th>ICV</th><th>Classificação</th></tr>
+      ${icvLevantamento.map((r,i)=> `<tr><td>${i+1}º</td><td>${escapeHtml(r.rua)}</td><td>${escapeHtml(r.bairro)}</td><td>${r.score}</td><td>${r.classe}</td></tr>`).join("")}
+    </table>`;
+
+  card.innerHTML = html;
+  c.appendChild(card);
+  document.getElementById("btnBackDiag").addEventListener("click", ()=> setTab("dashboard"));
+  document.getElementById("btnImprimirDiag").addEventListener("click", ()=> window.print());
 }
 
 function gerarPlanoRecuperacao(){
@@ -764,6 +984,7 @@ function renderICV(){
   const listCard = el("div","card");
   dados.forEach(r=>{
     const item = el("div","list-item");
+    item.style.cursor = "pointer";
     item.innerHTML = `<div style="display:flex;align-items:center;gap:12px;">
         <div class="icv-ring" style="background:${r.cor};">${r.score}</div>
         <div style="flex:1;">
@@ -772,9 +993,51 @@ function renderICV(){
         </div>
         <span class="badge" style="background:${r.cor}22;color:${r.cor};">${r.classe}</span>
       </div>`;
+    item.addEventListener("click", ()=> renderHistoricoVia(r));
     listCard.appendChild(item);
   });
   c.appendChild(listCard);
+}
+
+function renderHistoricoVia(r){
+  const c = document.getElementById("content");
+  c.innerHTML = "";
+  const ocorrenciasOrdenadas = r.ocorrencias.slice().sort((a,b)=> new Date(a.timestamp) - new Date(b.timestamp));
+  const concluidas = ocorrenciasOrdenadas.filter(v=> v.status==="Concluído");
+  const ultimaIntervencao = concluidas.length ? concluidas[concluidas.length-1] : null;
+  const primeiraFoto = ocorrenciasOrdenadas.find(v=> v.fotos && v.fotos[0]);
+  const ultimaFoto = ocorrenciasOrdenadas.slice().reverse().find(v=> v.fotos && v.fotos[0]);
+
+  const card = el("div","card");
+  card.innerHTML = `
+    <button class="btn btn-outline btn-sm" id="btnBackHist" style="width:auto;margin-bottom:12px;">← Voltar ao ranking</button>
+    <h3>${escapeHtml(r.rua)}</h3>
+    <div class="hint">${escapeHtml(r.bairro)}</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:14px 0;">
+      <div class="icv-ring" style="background:${r.cor};width:64px;height:64px;font-size:17px;">${r.score}</div>
+      <div><b>${r.classe}</b><div class="hint">Índice de Conservação Viária atual</div></div>
+    </div>
+    <div class="kv"><span>Quantidade de ocorrências</span><b>${r.ocorrencias.length}</b></div>
+    <div class="kv"><span>Quantidade de manutenções concluídas</span><b>${concluidas.length}</b></div>
+    <div class="kv"><span>Última intervenção</span><b>${ultimaIntervencao ? fmtDate(ultimaIntervencao.timestamp) : "nenhuma ainda"}</b></div>
+    ${(primeiraFoto || ultimaFoto) ? `
+      <label style="margin-top:14px;">Fotos — primeiro e mais recente registro</label>
+      <div class="row">
+        ${primeiraFoto ? `<div><img src="${primeiraFoto.fotos[0]}" style="width:100%;border-radius:10px;"><div class="hint">Antes (${fmtDate(primeiraFoto.timestamp)})</div></div>` : "<div></div>"}
+        ${ultimaFoto && ultimaFoto!==primeiraFoto ? `<div><img src="${ultimaFoto.fotos[0]}" style="width:100%;border-radius:10px;"><div class="hint">Mais recente (${fmtDate(ultimaFoto.timestamp)})</div></div>` : "<div></div>"}
+      </div>` : ""}
+    <label style="margin-top:14px;">Linha do tempo de ocorrências</label>
+  `;
+  ocorrenciasOrdenadas.forEach(v=>{
+    const li = el("div","list-item");
+    li.innerHTML = `<div class="li-top">
+        <div><div class="li-title">${escapeHtml(v.subcategoria)}</div><div class="li-sub">${fmtDate(v.timestamp)}</div></div>
+        <span class="badge ${badgeClass(v.urgencia)}">${v.status}</span>
+      </div>`;
+    card.appendChild(li);
+  });
+  card.querySelector("#btnBackHist").addEventListener("click", ()=> setTab("icv"));
+  c.appendChild(card);
 }
 
 /* ============================================================
@@ -791,9 +1054,11 @@ function gerarOSDeVistoria(v){
     responsavel: v.secretaria,
     equipe: "",
     prazo: v.prazo,
-    status: "Pendente"
+    status: "Pendente",
+    _pendingSync: true
   });
   saveOS(arr);
+  sincronizarTudo(true);
 }
 
 function renderOSView(){
@@ -839,7 +1104,7 @@ function renderOSView(){
       sel.addEventListener("change", ()=>{
         const arr = getOS();
         const idx = arr.findIndex(o=>o.numero===sel.dataset.numero);
-        if(idx>=0){ arr[idx].status = sel.value; saveOS(arr); }
+        if(idx>=0){ arr[idx].status = sel.value; arr[idx]._pendingSync = true; saveOS(arr); sincronizarTudo(true); }
       });
     });
   }
@@ -853,6 +1118,47 @@ function renderOSView(){
 function renderRelatorios(){
   const c = document.getElementById("content");
   const vistorias = getVistorias();
+
+  const backupCard = el("div","card");
+  backupCard.innerHTML = `<div class="section-title">Backup completo</div>
+    <div class="hint">Como os dados ficam no aparelho (e são sincronizados quando há internet), é recomendável exportar um backup de segurança periodicamente.</div>
+    <button class="btn btn-dark" id="btnExportBackup" style="margin-top:10px;">⬇️ Exportar backup completo (JSON)</button>
+    <label style="margin-top:12px;">Importar backup</label>
+    <input type="file" id="inpImportBackup" accept="application/json">
+    <div class="hint">A importação mescla com os dados atuais (não apaga nada existente).</div>`;
+  c.appendChild(backupCard);
+  backupCard.querySelector("#btnExportBackup").addEventListener("click", ()=>{
+    const payload = { vistorias: getVistorias(), os: getOS(), exportadoEm: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {type:"application/json"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "backup_mapeamento_urbano_" + new Date().toISOString().slice(0,10) + ".json";
+    a.click();
+  });
+  backupCard.querySelector("#inpImportBackup").addEventListener("change", (e)=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev)=>{
+      try{
+        const payload = JSON.parse(ev.target.result);
+        if(!payload.vistorias && !payload.os) throw new Error("Formato inválido");
+        const vistoriasAtuais = getVistorias();
+        const vistoriasMescladas = mesclarPorChave(vistoriasAtuais, payload.vistorias||[], "id");
+        saveVistorias(vistoriasMescladas);
+        const osAtuais = getOS();
+        const osMescladas = mesclarPorChave(osAtuais, payload.os||[], "numero");
+        saveOS(osMescladas);
+        alert("Backup importado e mesclado com sucesso.");
+        render();
+      }catch(err){
+        alert("Não foi possível importar esse arquivo. Verifique se é um backup válido gerado por este app.");
+      }
+      e.target.value = "";
+    };
+    reader.readAsText(file);
+  });
+
   const bairros = [...new Set(vistorias.map(v=>v.bairro))];
 
   const card = el("div","card");
@@ -918,10 +1224,41 @@ function renderRelatorios(){
   draw();
 }
 
+/* ---------- LOGIN SIMPLES (identificação do servidor) ---------- */
+function renderLoginGate(){
+  document.getElementById("nav").style.display = "none";
+  document.getElementById("fabNew").style.display = "none";
+  const c = document.getElementById("content");
+  c.innerHTML = "";
+  const card = el("div","card");
+  card.style.margin = "30% 16px 0";
+  card.innerHTML = `<h3>Identifique-se</h3>
+    <div class="hint">Informe seu nome para começar a registrar vistorias. Isso identifica quem fez cada registro.</div>
+    <label>Seu nome</label><input id="loginNome" placeholder="Nome completo">
+    <button class="btn btn-primary" id="btnLogin" style="margin-top:14px;">Entrar</button>`;
+  c.appendChild(card);
+  const submeter = ()=>{
+    const nome = document.getElementById("loginNome").value.trim();
+    if(!nome){ alert("Informe seu nome."); return; }
+    setServidor(nome);
+    document.getElementById("nav").style.display = "";
+    iniciarApp();
+  };
+  document.getElementById("btnLogin").addEventListener("click", submeter);
+  document.getElementById("loginNome").addEventListener("keydown", e=>{ if(e.key==="Enter") submeter(); });
+}
+
+function iniciarApp(){
+  setTab("vistoria");
+  sincronizarTudo(true);
+}
+
 /* ---------- INIT ---------- */
 if("serviceWorker" in navigator){
   window.addEventListener("load", ()=>{
     navigator.serviceWorker.register("sw.js").catch(()=>{ document.getElementById("syncdot").classList.add("off"); });
   });
 }
-setTab("vistoria");
+if(!navigator.onLine) updateSyncIndicator("offline");
+if(!getServidor()) renderLoginGate();
+else iniciarApp();

@@ -55,6 +55,9 @@ button{font-family:inherit;}
 #topbar .titles strong{font-size:15px;}
 #syncdot{width:9px;height:9px;border-radius:50%;background:var(--verde);flex-shrink:0;}
 #syncdot.off{background:var(--texto-suave);}
+#syncdot.syncing{background:var(--amarelo);animation:pulse 1s infinite;}
+#syncdot.error{background:var(--vermelho);}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
 
 /* CONTENT */
 #content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 16px calc(98px + env(safe-area-inset-bottom,0px)) 16px;}
