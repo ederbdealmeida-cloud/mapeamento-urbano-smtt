@@ -1,4 +1,4 @@
-const CACHE_NAME = "mui-smtt-v15";
+const CACHE_NAME = "mui-smtt-v16";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -23,9 +23,9 @@ self.addEventListener("activate", (event) => {
 });
 
 // Estratégia: TUDO da mesma origem (página, app.js, manifest) = network-first,
-// ou seja, sempre busca a versão mais nova quando há internet, e só usa o
-// cache como reserva quando estiver offline. Isso evita a necessidade de o
-// usuário limpar o cache manualmente para receber atualizações do app.
+// com cache:"no-store" para ignorar também o cache HTTP nativo do navegador
+// (não só o nosso cache do Service Worker) — assim sempre busca a versão mais
+// nova quando há internet, e só usa nosso cache como reserva quando offline.
 // Recursos externos (mapas, gráficos) seguem a mesma lógica.
 self.addEventListener("fetch", (event) => {
   const req = event.request;
@@ -33,7 +33,7 @@ self.addEventListener("fetch", (event) => {
 
   if (req.mode === "navigate") {
     event.respondWith(
-      fetch(req).catch(() =>
+      fetch(req, { cache: "no-store" }).catch(() =>
         caches.match("./index.html").then((cached) => cached || caches.match(req))
       )
     );
@@ -41,7 +41,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   event.respondWith(
-    fetch(req)
+    fetch(new Request(req.url, { cache: "no-store" }))
       .then((res) => {
         const resClone = res.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone)).catch(()=>{});

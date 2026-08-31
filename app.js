@@ -179,6 +179,11 @@ function setServidor(n){ DB.set("mui_servidor", n); }
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function fmtDate(iso){ const d = new Date(iso); return d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"}); }
+function toDatetimeLocal(iso){
+  const d = iso ? new Date(iso) : new Date();
+  const pad = n=> String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 function badgeClass(u){ return {"Baixa":"badge-baixa","Média":"badge-media","Alta":"badge-alta","Emergencial":"badge-emergencial"}[u] || "badge-status"; }
 function markerColor(v){
   if(v.status === "Concluído") return "#22C55E";
@@ -425,6 +430,7 @@ function renderVistoriaForm(levantamentoMode, editRecord){
     <label>Bairro</label><input id="fBairro" placeholder="Ex: Centro" value="${isEdicao ? escapeHtml(editRecord.bairro) : ""}">
     <label>Rua</label><input id="fRua" placeholder="Ex: Rua XV de Novembro" value="${isEdicao ? escapeHtml(editRecord.rua) : ""}">
     <label>Número aproximado</label><input id="fNumero" placeholder="Ex: 450 (opcional)" value="${isEdicao ? escapeHtml(editRecord.numero||"") : ""}">
+    <label>Data e hora da vistoria</label><input type="datetime-local" id="fData" value="${toDatetimeLocal(isEdicao ? editRecord.timestamp : null)}">
 
     <div class="section-title" style="margin-top:18px;">Categoria da ocorrência</div>
     <div class="chip-group" id="chipsCat"></div>
@@ -618,9 +624,12 @@ function renderVistoriaForm(levantamentoMode, editRecord){
       return;
     }
     const fotosFinais = STATE.editingExistingFotos.concat(novasFotosBase64);
+    const dataInformada = document.getElementById("fData").value;
+    const timestampFinal = dataInformada ? new Date(dataInformada).toISOString() : new Date().toISOString();
     const camposComuns = {
       bairro, rua,
       numero: document.getElementById("fNumero").value.trim(),
+      timestamp: timestampFinal,
       lat: STATE.gps ? STATE.gps.lat : null,
       lng: STATE.gps ? STATE.gps.lng : null,
       categoria: selCat, subcategoria: selSub,
@@ -640,7 +649,6 @@ function renderVistoriaForm(levantamentoMode, editRecord){
     } else {
       arr.push({
         id: uid(),
-        timestamp: new Date().toISOString(),
         servidor: getServidor(),
         status: "Pendente",
         modo: levantamentoMode ? "levantamento" : "avulsa",
@@ -1136,6 +1144,7 @@ function gerarOSDeVistoria(v){
   arr.push({
     numero, vistoriaId: v.id,
     data: new Date().toISOString(),
+    urgencia: v.urgencia,
     local: v.bairro + " - " + v.rua + (v.numero? ", "+v.numero:""),
     servico: v.servico,
     responsavel: v.secretaria,
@@ -1179,7 +1188,12 @@ function renderOSView(){
     list.forEach(o=>{
       const item = el("div","card");
       item.innerHTML = `<div class="li-top">
-          <div><div class="li-title">${o.numero}</div><div class="li-sub">${escapeHtml(o.local)}</div></div>
+          <div>
+            ${o.urgencia ? `<span class="badge ${badgeClass(o.urgencia)}" style="margin-bottom:4px;">${o.urgencia}</span><br>` : ""}
+            <div class="li-title">${o.numero}</div>
+            <div class="li-sub">${escapeHtml(o.local)}</div>
+            <div class="li-sub">${fmtDate(o.data)}</div>
+          </div>
           <span class="tag-cat">${o.prazo}</span>
         </div>
         <div class="li-sub">${escapeHtml(o.servico)} · Resp.: ${escapeHtml(o.responsavel)}</div>
