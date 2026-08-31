@@ -88,6 +88,10 @@ async function fsUpsert(col, id, obj){
   if(!res.ok) throw new Error("Falha ao enviar ao Firestore (" + res.status + ")");
   return res.json();
 }
+async function fsDelete(col, id){
+  const res = await fetch(fsDocUrl(col, id), { method:"DELETE" });
+  if(!res.ok && res.status !== 404) throw new Error("Falha ao excluir do Firestore (" + res.status + ")");
+}
 async function fsListAll(col){
   let all = [], pageToken = null;
   do{
@@ -1097,7 +1101,8 @@ function renderOSView(){
           <option ${o.status==="Em execução"?"selected":""}>Em execução</option>
           <option ${o.status==="Concluído"?"selected":""}>Concluído</option>
           <option ${o.status==="Cancelado"?"selected":""}>Cancelado</option>
-        </select>`;
+        </select>
+        <button class="btn btn-outline btn-sm" data-excluir="${o.numero}" style="margin-top:8px;color:var(--vermelho);border-color:var(--vermelho);">🗑️ Excluir OS</button>`;
       listCard.appendChild(item);
     });
     listCard.querySelectorAll(".selStatus").forEach(sel=>{
@@ -1105,6 +1110,16 @@ function renderOSView(){
         const arr = getOS();
         const idx = arr.findIndex(o=>o.numero===sel.dataset.numero);
         if(idx>=0){ arr[idx].status = sel.value; arr[idx]._pendingSync = true; saveOS(arr); sincronizarTudo(true); }
+      });
+    });
+    listCard.querySelectorAll("[data-excluir]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        const numero = btn.dataset.excluir;
+        if(!confirm(`Excluir a ${numero}? Esta ação não pode ser desfeita.`)) return;
+        const arr = getOS().filter(o=> o.numero !== numero);
+        saveOS(arr);
+        draw();
+        try{ await fsDelete(COL_OS, numero); }catch(e){ console.error("Erro ao excluir do Firestore:", e); }
       });
     });
   }
