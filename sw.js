@@ -1,4 +1,4 @@
-const CACHE_NAME = "mui-smtt-v11";
+const CACHE_NAME = "mui-smtt-v12";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -22,17 +22,14 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Estratégia: navegação de página (recarregar/retomar o app) = network-first,
-// com fallback SEMPRE para o index.html em cache (evita 404 por URLs
-// ligeiramente diferentes ao retomar do segundo plano, ex: após usar a câmera).
-// Demais recursos da mesma origem = cache-first com atualização em segundo plano.
-// Recursos externos (mapas, gráficos) = network-first, cai para cache se offline.
+// Estratégia: TUDO da mesma origem (página, app.js, manifest) = network-first,
+// ou seja, sempre busca a versão mais nova quando há internet, e só usa o
+// cache como reserva quando estiver offline. Isso evita a necessidade de o
+// usuário limpar o cache manualmente para receber atualizações do app.
+// Recursos externos (mapas, gráficos) seguem a mesma lógica.
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
-
-  const url = new URL(req.url);
-  const isSameOrigin = url.origin === self.location.origin;
 
   if (req.mode === "navigate") {
     event.respondWith(
@@ -43,28 +40,13 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (isSameOrigin) {
-    event.respondWith(
-      caches.match(req).then((cached) => {
-        const fetchPromise = fetch(req)
-          .then((res) => {
-            const resClone = res.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone)).catch(()=>{});
-            return res;
-          })
-          .catch(() => cached);
-        return cached || fetchPromise;
+  event.respondWith(
+    fetch(req)
+      .then((res) => {
+        const resClone = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone)).catch(()=>{});
+        return res;
       })
-    );
-  } else {
-    event.respondWith(
-      fetch(req)
-        .then((res) => {
-          const resClone = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone)).catch(()=>{});
-          return res;
-        })
-        .catch(() => caches.match(req))
-    );
-  }
+      .catch(() => caches.match(req))
+  );
 });

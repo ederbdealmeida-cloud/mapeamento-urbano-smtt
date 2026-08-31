@@ -1273,6 +1273,14 @@ if("serviceWorker" in navigator){
   window.addEventListener("load", ()=>{
     navigator.serviceWorker.register("sw.js").catch(()=>{ document.getElementById("syncdot").classList.add("off"); });
   });
+  // Quando uma nova versão do app assume o controle (após atualização),
+  // recarrega a página sozinho — sem precisar limpar cache manualmente.
+  let jaRecarregou = false;
+  navigator.serviceWorker.addEventListener("controllerchange", ()=>{
+    if(jaRecarregou) return;
+    jaRecarregou = true;
+    window.location.reload();
+  });
 }
 if(!navigator.onLine) updateSyncIndicator("offline");
 if(!getServidor()) renderLoginGate();
