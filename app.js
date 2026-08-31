@@ -199,10 +199,12 @@ let STATE = { tab:"vistoria", editingPhotos: [], editingExistingFotos: [], editi
 
 /* ---------- NAVEGAÇÃO ---------- */
 const TAB_TITLES = { vistoria:"Vistoria", mapa:"Mapa Interativo", dashboard:"Painel Gerencial", icv:"Índice de Conservação Viária", os:"Ordens de Serviço", relatorios:"Relatórios" };
+const TAB_ICONS = { vistoria:"📋", mapa:"🗺", dashboard:"📊", icv:"🛣", os:"🔧", relatorios:"📄" };
 
 function setTab(tab){
   STATE.tab = tab;
   document.getElementById("pagetitle").textContent = TAB_TITLES[tab];
+  document.getElementById("pageicon").textContent = TAB_ICONS[tab] || "📋";
   document.querySelectorAll(".nav-btn").forEach(b=>b.classList.toggle("active", b.dataset.tab===tab));
   document.getElementById("fabNew").style.display = tab==="vistoria" ? "flex" : "none";
   render();
@@ -253,15 +255,23 @@ function renderVistoriaHome(){
   startCard.querySelector("#btnLevantamento").addEventListener("click", ()=>{ STATE.editingPhotos=[]; STATE.editingExistingFotos=[]; STATE.editingId=null; STATE.gps=null; renderVistoriaForm(true); });
   card.appendChild(startCard);
 
-  const listCard = el("div","card");
-  listCard.innerHTML = `<div class="section-title">Ocorrências registradas (${list.length})</div>`;
+  const countLabel = el("div","section-title");
+  countLabel.textContent = `Ocorrências registradas (${list.length})`;
+  c.appendChild(card);
+  c.appendChild(countLabel);
+
   if(list.length===0){
-    listCard.innerHTML += `<div class="empty"><div class="big">📭</div>Nenhuma vistoria ainda.<br>Toque em "Nova vistoria" para começar.</div>`;
-  } else {
-    list.slice(0,50).forEach(v=>{
-      const atrasada = isAtrasada(v);
-      const li = el("div","list-item");
-      li.innerHTML = `<div class="li-top">
+    const emptyCard = el("div","card");
+    emptyCard.innerHTML = `<div class="empty"><div class="big">📭</div>Nenhuma vistoria ainda.<br>Toque em "Nova vistoria" para começar.</div>`;
+    c.appendChild(emptyCard);
+    return;
+  }
+
+  const occContainer = el("div");
+  list.slice(0,50).forEach(v=>{
+    const atrasada = isAtrasada(v);
+    const occ = el("div","card");
+    occ.innerHTML = `<div class="li-top">
           <div>
             <div class="li-title">${escapeHtml(v.rua)}${v.numero? ", "+escapeHtml(v.numero):""}</div>
             <div class="li-sub">${escapeHtml(v.bairro)} · ${escapeHtml(v.subcategoria)}</div>
@@ -272,30 +282,28 @@ function renderVistoriaHome(){
           </div>
         </div>
         <div class="li-sub">${fmtDate(v.timestamp)} · ${escapeHtml(v.servidor||"—")} · <b>${v.status}</b></div>
-        ${v.fotos && v.fotos.length ? `<div class="thumbs">${v.fotos.slice(0,4).map(f=>`<img class="thumb" src="${f}">`).join("")}</div>` : ""}
-        <div class="row" style="margin-top:8px;flex-wrap:wrap;">
-          <button class="btn btn-outline btn-sm" data-act="ver" data-id="${v.id}">Ver</button>
-          <button class="btn btn-outline btn-sm" data-act="editar" data-id="${v.id}">Editar</button>
-          <button class="btn btn-outline btn-sm" data-act="os" data-id="${v.id}">Gerar OS</button>
-          <button class="btn btn-outline btn-sm" data-act="concluir" data-id="${v.id}">${v.status==="Concluído"?"Reabrir":"Concluir"}</button>
+        ${v.fotos && v.fotos.length ? `<img class="thumb" style="width:100%;height:140px;margin-top:10px;" src="${v.fotos[0]}">` : ""}
+        <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:6px;">
+          <button class="btn btn-outline btn-sm" data-act="ver" data-id="${v.id}" style="flex:1;min-width:70px;">Ver</button>
+          <button class="btn btn-outline btn-sm" data-act="editar" data-id="${v.id}" style="flex:1;min-width:70px;">Editar</button>
+          <button class="btn btn-outline btn-sm" data-act="os" data-id="${v.id}" style="flex:1;min-width:70px;">Gerar OS</button>
+          <button class="btn btn-outline btn-sm" data-act="concluir" data-id="${v.id}" style="flex:1;min-width:70px;">${v.status==="Concluído"?"Reabrir":"Concluir"}</button>
         </div>`;
-      listCard.appendChild(li);
-    });
-    listCard.addEventListener("click", (e)=>{
-      const btn = e.target.closest("button[data-act]");
-      if(!btn) return;
-      const id = btn.dataset.id;
-      const arr = getVistorias();
-      const idx = arr.findIndex(x=>x.id===id);
-      if(idx<0) return;
-      if(btn.dataset.act==="ver") renderVistoriaDetail(arr[idx]);
-      if(btn.dataset.act==="editar") iniciarEdicaoVistoria(arr[idx]);
-      if(btn.dataset.act==="concluir"){ arr[idx].status = arr[idx].status==="Concluído" ? "Pendente" : "Concluído"; arr[idx]._pendingSync = true; saveVistorias(arr); render(); sincronizarTudo(true); }
-      if(btn.dataset.act==="os"){ gerarOSDeVistoria(arr[idx]); setTab("os"); }
-    });
-  }
-  card.appendChild(listCard);
-  c.appendChild(card);
+    occContainer.appendChild(occ);
+  });
+  occContainer.addEventListener("click", (e)=>{
+    const btn = e.target.closest("button[data-act]");
+    if(!btn) return;
+    const id = btn.dataset.id;
+    const arr = getVistorias();
+    const idx = arr.findIndex(x=>x.id===id);
+    if(idx<0) return;
+    if(btn.dataset.act==="ver") renderVistoriaDetail(arr[idx]);
+    if(btn.dataset.act==="editar") iniciarEdicaoVistoria(arr[idx]);
+    if(btn.dataset.act==="concluir"){ arr[idx].status = arr[idx].status==="Concluído" ? "Pendente" : "Concluído"; arr[idx]._pendingSync = true; saveVistorias(arr); render(); sincronizarTudo(true); }
+    if(btn.dataset.act==="os"){ gerarOSDeVistoria(arr[idx]); setTab("os"); }
+  });
+  c.appendChild(occContainer);
 }
 
 function iniciarEdicaoVistoria(v){
@@ -985,7 +993,7 @@ function renderICV(){
     return;
   }
 
-  const listCard = el("div","card");
+  const itemsWrap = el("div");
   dados.forEach(r=>{
     const item = el("div","list-item");
     item.style.cursor = "pointer";
@@ -998,9 +1006,9 @@ function renderICV(){
         <span class="badge" style="background:${r.cor}22;color:${r.cor};">${r.classe}</span>
       </div>`;
     item.addEventListener("click", ()=> renderHistoricoVia(r));
-    listCard.appendChild(item);
+    itemsWrap.appendChild(item);
   });
-  c.appendChild(listCard);
+  c.appendChild(itemsWrap);
 }
 
 function renderHistoricoVia(r){
@@ -1076,20 +1084,25 @@ function renderOSView(){
   filterCard.appendChild(bar);
   c.appendChild(filterCard);
 
-  const listCard = el("div","card");
-  c.appendChild(listCard);
+  const countLabel = el("div","section-title");
+  c.appendChild(countLabel);
+  const container = el("div");
+  c.appendChild(container);
 
   function draw(){
     const filtro = document.getElementById("fltStatus").value;
     let list = getOS().slice().reverse();
     if(filtro) list = list.filter(o=>o.status===filtro);
-    listCard.innerHTML = `<div class="section-title">Ordens de serviço (${list.length})</div>`;
+    countLabel.textContent = `Ordens de serviço (${list.length})`;
+    container.innerHTML = "";
     if(list.length===0){
-      listCard.innerHTML += `<div class="empty"><div class="big">🔧</div>Nenhuma OS encontrada. Gere uma a partir de uma vistoria.</div>`;
+      const empty = el("div","card");
+      empty.innerHTML = `<div class="empty"><div class="big">🔧</div>Nenhuma OS encontrada. Gere uma a partir de uma vistoria.</div>`;
+      container.appendChild(empty);
       return;
     }
     list.forEach(o=>{
-      const item = el("div","list-item");
+      const item = el("div","card");
       item.innerHTML = `<div class="li-top">
           <div><div class="li-title">${o.numero}</div><div class="li-sub">${escapeHtml(o.local)}</div></div>
           <span class="tag-cat">${o.prazo}</span>
@@ -1102,17 +1115,17 @@ function renderOSView(){
           <option ${o.status==="Concluído"?"selected":""}>Concluído</option>
           <option ${o.status==="Cancelado"?"selected":""}>Cancelado</option>
         </select>
-        <button class="btn btn-outline btn-sm" data-excluir="${o.numero}" style="margin-top:8px;color:var(--vermelho);border-color:var(--vermelho);">🗑️ Excluir OS</button>`;
-      listCard.appendChild(item);
+        <button class="btn btn-outline btn-sm" data-excluir="${o.numero}" style="margin-top:10px;width:100%;color:var(--danger-red);border-color:#FCA5A5;">🗑️ Excluir OS</button>`;
+      container.appendChild(item);
     });
-    listCard.querySelectorAll(".selStatus").forEach(sel=>{
+    container.querySelectorAll(".selStatus").forEach(sel=>{
       sel.addEventListener("change", ()=>{
         const arr = getOS();
         const idx = arr.findIndex(o=>o.numero===sel.dataset.numero);
         if(idx>=0){ arr[idx].status = sel.value; arr[idx]._pendingSync = true; saveOS(arr); sincronizarTudo(true); }
       });
     });
-    listCard.querySelectorAll("[data-excluir]").forEach(btn=>{
+    container.querySelectorAll("[data-excluir]").forEach(btn=>{
       btn.addEventListener("click", async ()=>{
         const numero = btn.dataset.excluir;
         if(!confirm(`Excluir a ${numero}? Esta ação não pode ser desfeita.`)) return;
