@@ -1,4 +1,4 @@
-const CACHE_NAME = "mui-smtt-v17";
+const CACHE_NAME = "mui-smtt-v18";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -22,11 +22,13 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Estratégia: TUDO da mesma origem (página, app.js, manifest) = network-first,
-// com cache:"no-store" para ignorar também o cache HTTP nativo do navegador
-// (não só o nosso cache do Service Worker) — assim sempre busca a versão mais
-// nova quando há internet, e só usa nosso cache como reserva quando offline.
-// Recursos externos (mapas, gráficos) seguem a mesma lógica.
+// Estratégia: só a MESMA origem (página, app.js, manifest) passa pelo nosso
+// cache, sempre em network-first com cache:"no-store" (ignora também o cache
+// HTTP nativo do navegador) — assim sempre busca a versão mais nova quando há
+// internet, e só usa nosso cache como reserva quando offline.
+// Recursos de OUTROS domínios (Google Maps, Chart.js, geocodificação,
+// Firestore) NÃO são interceptados — passam direto pelo navegador, evitando
+// quebrar o modo/credenciais originais da requisição.
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -40,8 +42,11 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+
   event.respondWith(
-    fetch(new Request(req.url, { cache: "no-store" }))
+    fetch(req, { cache: "no-store" })
       .then((res) => {
         const resClone = res.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone)).catch(()=>{});
