@@ -1208,7 +1208,24 @@ function gerarOSDeVistoria(v){
   sincronizarTudo(true);
 }
 
+// Recupera a prioridade de OS criadas antes desse campo existir, buscando na
+// vistoria de origem (via vistoriaId). Roda automaticamente ao abrir a aba OS.
+function migrarPrioridadeOS(){
+  const osArr = getOS();
+  const vistorias = getVistorias();
+  let mudou = false;
+  osArr.forEach(o=>{
+    if(!o.urgencia && o.vistoriaId){
+      const v = vistorias.find(x=> x.id === o.vistoriaId);
+      if(v && v.urgencia){ o.urgencia = v.urgencia; o._pendingSync = true; mudou = true; }
+    }
+  });
+  if(mudou){ saveOS(osArr); sincronizarTudo(true); }
+  return mudou;
+}
+
 function renderOSView(){
+  migrarPrioridadeOS();
   const c = document.getElementById("content");
   const filterCard = el("div");
   const bar = el("div","filter-bar");
