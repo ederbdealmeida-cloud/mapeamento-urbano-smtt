@@ -184,6 +184,19 @@ function toDatetimeLocal(iso){
   const pad = n=> String(n).padStart(2,"0");
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+// Geocodificação reversa gratuita (OpenStreetMap Nominatim, sem chave de API).
+// Sujeita ao limite de uso da política do Nominatim — uso ocasional (1 captura
+// de GPS por vez) está dentro do aceitável.
+async function buscarEnderecoPorGPS(lat, lng){
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1&accept-language=pt-BR`;
+  const res = await fetch(url, { headers: { "Accept": "application/json" } });
+  if(!res.ok) throw new Error("Falha ao consultar endereço (" + res.status + ")");
+  const data = await res.json();
+  const addr = data.address || {};
+  const rua = addr.road || addr.pedestrian || addr.footway || addr.residential || "";
+  const bairro = addr.suburb || addr.neighbourhood || addr.quarter || addr.village || "";
+  return { rua, bairro };
+}
 function badgeClass(u){ return {"Baixa":"badge-baixa","Média":"badge-media","Alta":"badge-alta","Emergencial":"badge-emergencial"}[u] || "badge-status"; }
 function markerColor(v){
   if(v.status === "Concluído") return "#22C55E";
@@ -472,7 +485,23 @@ function renderVistoriaForm(levantamentoMode, editRecord){
     res.innerHTML = "Obtendo localização...";
     navigator.geolocation.getCurrentPosition(pos=>{
       STATE.gps = {lat:pos.coords.latitude, lng:pos.coords.longitude};
-      res.innerHTML = `✅ ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
+      res.innerHTML = `✅ ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}<br><span class="hint" id="geocodeStatus">🔎 Buscando endereço...</span>`;
+      buscarEnderecoPorGPS(pos.coords.latitude, pos.coords.longitude).then(({rua, bairro})=>{
+        const status = document.getElementById("geocodeStatus");
+        const fRua = document.getElementById("fRua");
+        const fBairro = document.getElementById("fBairro");
+        let preenchido = [];
+        if(rua && fRua && !fRua.value.trim()){ fRua.value = rua; preenchido.push("rua"); }
+        if(bairro && fBairro && !fBairro.value.trim()){ fBairro.value = bairro; preenchido.push("bairro"); }
+        if(status){
+          status.textContent = preenchido.length
+            ? `📍 Endereço detectado: preenchemos ${preenchido.join(" e ")} automaticamente (confira e ajuste se precisar).`
+            : "Não foi possível identificar um endereço para este ponto.";
+        }
+      }).catch(()=>{
+        const status = document.getElementById("geocodeStatus");
+        if(status) status.textContent = "Não foi possível buscar o endereço automaticamente (sem internet ou serviço indisponível). Preencha manualmente.";
+      });
     }, err=>{
       if(err.code === err.PERMISSION_DENIED){
         res.innerHTML = `⚠️ Permissão de localização negada.
