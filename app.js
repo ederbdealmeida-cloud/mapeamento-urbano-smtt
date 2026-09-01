@@ -198,6 +198,14 @@ async function buscarEnderecoPorGPS(lat, lng){
   return { rua, bairro };
 }
 function badgeClass(u){ return {"Baixa":"badge-baixa","Média":"badge-media","Alta":"badge-alta","Emergencial":"badge-emergencial"}[u] || "badge-status"; }
+function corStatusOS(status){
+  return {
+    "Pendente": "#EAB308",
+    "Em execução": "#0369A1",
+    "Concluído": "#22C55E",
+    "Cancelado": "#94A3B8"
+  }[status] || "#94A3B8";
+}
 function markerColor(v){
   if(v.status === "Concluído") return "#22C55E";
   if(v.urgencia === "Emergencial") return "#EF4444";
@@ -1216,6 +1224,9 @@ function renderOSView(){
     }
     list.forEach(o=>{
       const item = el("div","card");
+      const cor = corStatusOS(o.status);
+      item.style.borderLeft = `4px solid ${cor}`;
+      item.style.background = `linear-gradient(to right, ${cor}0D, var(--card-bg) 40px)`;
       item.innerHTML = `<div class="li-top">
           <div>
             ${o.urgencia ? `<span class="badge ${badgeClass(o.urgencia)}" style="margin-bottom:4px;">${o.urgencia}</span><br>` : ""}
@@ -1223,7 +1234,10 @@ function renderOSView(){
             <div class="li-sub">${escapeHtml(o.local)}</div>
             <div class="li-sub">${fmtDate(o.data)}</div>
           </div>
-          <span class="tag-cat">${o.prazo}</span>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+            <span class="tag-cat">${o.prazo}</span>
+            <span class="badge" style="background:${cor}22;color:${cor};">${o.status}</span>
+          </div>
         </div>
         <div class="li-sub">${escapeHtml(o.servico)} · Resp.: ${escapeHtml(o.responsavel)}</div>
         <label style="margin-top:8px;">Status</label>
@@ -1240,7 +1254,7 @@ function renderOSView(){
       sel.addEventListener("change", ()=>{
         const arr = getOS();
         const idx = arr.findIndex(o=>o.numero===sel.dataset.numero);
-        if(idx>=0){ arr[idx].status = sel.value; arr[idx]._pendingSync = true; saveOS(arr); sincronizarTudo(true); }
+        if(idx>=0){ arr[idx].status = sel.value; arr[idx]._pendingSync = true; saveOS(arr); draw(); sincronizarTudo(true); }
       });
     });
     container.querySelectorAll("[data-excluir]").forEach(btn=>{
