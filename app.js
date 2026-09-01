@@ -61,6 +61,20 @@ const RULES = {
 
 const PRAZOS = {"Baixa":"30 dias","Média":"15 dias","Alta":"7 dias","Emergencial":"24 horas"};
 const URG_ORDER = ["Emergencial","Alta","Média","Baixa"];
+// Ordenação da fila de OS: prioridade Alta primeiro (mais antigas primeiro dentro
+// dela), depois Média (mesma regra), e por último Baixa — mas dentro de Baixa,
+// as mais recentes vêm antes das mais antigas. Emergencial (quando houver) fica
+// acima de Alta, por ser a urgência mais crítica do sistema.
+function ordenarOS(lista){
+  return lista.slice().sort((a,b)=>{
+    const ta = URG_ORDER.indexOf(a.urgencia); const rankA = ta<0 ? URG_ORDER.length : ta;
+    const tb = URG_ORDER.indexOf(b.urgencia); const rankB = tb<0 ? URG_ORDER.length : tb;
+    if(rankA !== rankB) return rankA - rankB;
+    const da = new Date(a.data||0).getTime();
+    const db = new Date(b.data||0).getTime();
+    return a.urgencia === "Baixa" ? (db - da) : (da - db);
+  });
+}
 const ICV_WEIGHTS = {"Pavimentação":40,"Drenagem":25,"Sinalização":20,"Acessibilidade":15};
 const URG_PENALTY = {"Emergencial":0.28,"Alta":0.16,"Média":0.08,"Baixa":0.03};
 const CENTER = [-29.876, -54.822]; // Cacequi, RS
@@ -1212,7 +1226,7 @@ function renderOSView(){
 
   function draw(){
     const filtro = document.getElementById("fltStatus").value;
-    let list = getOS().slice().reverse();
+    let list = ordenarOS(getOS());
     if(filtro) list = list.filter(o=>o.status===filtro);
     countLabel.textContent = `Ordens de serviço (${list.length})`;
     container.innerHTML = "";
@@ -1229,8 +1243,9 @@ function renderOSView(){
       item.style.background = `linear-gradient(to right, ${cor}0D, var(--card-bg) 40px)`;
       item.innerHTML = `<div class="li-top">
           <div>
-            ${o.urgencia ? `<span class="badge ${badgeClass(o.urgencia)}" style="margin-bottom:4px;">${o.urgencia}</span><br>` : ""}
-            <div class="li-title">${o.numero}</div>
+            <div class="li-sub" style="margin-bottom:4px;">Prioridade</div>
+            <span class="badge ${badgeClass(o.urgencia)}" style="margin-bottom:6px;">${o.urgencia || "—"}</span>
+            <div class="li-title" style="margin-top:6px;">${o.numero}</div>
             <div class="li-sub">${escapeHtml(o.local)}</div>
             <div class="li-sub">${fmtDate(o.data)}</div>
           </div>
